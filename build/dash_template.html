@@ -86,6 +86,11 @@ select,button.btn{font:inherit;font-size:13px;padding:6px 10px;border:1px solid 
 button.btn{cursor:pointer}
 .target{display:flex;gap:6px;align-items:center;font-size:12px;color:var(--fg-2)}
 .target input{font:inherit;width:110px;padding:5px 8px;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--fg);text-align:right}
+.period.sm{padding:10px 12px;background:var(--surface-2);border:0;box-shadow:none}
+.period.sm .preset{font-size:13px;padding:6px 12px;background:var(--surface)}
+.period.sm .preset[aria-pressed="true"]{background:var(--accent);color:#fff}
+.period.sm .range input{width:140px;background:var(--surface)}
+td.neg{color:var(--bad)}td.none{color:var(--fg-3);font-style:italic}
 .legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--fg-2)}
 footer{font-size:12px;color:var(--fg-3);display:grid;gap:4px}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
@@ -167,6 +172,15 @@ footer{font-size:12px;color:var(--fg-3);display:grid;gap:4px}
   </section>
 
   <section class="panel">
+    <div class="panel-h"><h2 id="dtblTitle">일별 상세</h2><span class="small muted" id="dtblSub"></span></div>
+    <div class="period sm">
+      <div class="presets" id="dpresets" role="group" aria-label="일별 상세 기간"></div>
+      <div class="range"><span class="lab">기간</span><input type="date" id="dfrom"><span>~</span><input type="date" id="dto"><span class="hint" id="dhint"></span></div>
+    </div>
+    <div class="tbl"><table id="ddetail"></table></div>
+  </section>
+
+  <section class="panel">
     <div class="panel-h"><h2>데이터 품질 · 확인 필요</h2><span class="small muted">원장 기준</span></div>
     <div class="notes" id="quality"></div>
   </section>
@@ -213,7 +227,7 @@ function unlock(){document.getElementById('gate').hidden=true;document.getElemen
 
 /* ---------- data ---------- */
 let M, D, allDays, lastDay, firstDay, sep, oct25, S;
-function prepare(){ M=DATA.monthly; D=DATA.daily; allDays=[...new Set(D.map(d=>d.date))].sort(); lastDay=allDays[allDays.length-1]; firstDay=allDays[0]; sep=tot(2026)[8]; oct25=tot(2025)[9]; S={ ch:'전체', sub:null, preset:'7', from:addD(lastDay,-6), to:lastDay }; }
+function prepare(){ M=DATA.monthly; D=DATA.daily; allDays=[...new Set(D.map(d=>d.date))].sort(); lastDay=allDays[allDays.length-1]; firstDay=allDays[0]; sep=tot(2026)[8]; oct25=tot(2025)[9]; S={ ch:'전체', sub:null, preset:'7', from:addD(lastDay,-6), to:lastDay, d:{preset:'30', from:addD(lastDay,-29), to:lastDay} }; }
 const m26 = ch => Array.from({length:12},(_,i)=>M.find(r=>r.y===2026&&r.m===i+1&&r.ch===ch));
 const m25 = ch => Array.from({length:12},(_,i)=>M.find(r=>r.y===2025&&r.m===i+1&&r.ch===ch));
 const tot = y => Array.from({length:12},(_,i)=>{const rs=M.filter(r=>r.y===y&&r.m===i+1&&(y===2025?r.ch==='합계':CH.includes(r.ch)));return rs.some(r=>r.sales!=null)?rs.reduce((a,r)=>a+(r.sales||0),0):null});
@@ -243,6 +257,10 @@ function init(){
   pr.addEventListener('click',e=>{const b=e.target.closest('.preset'); if(!b) return; S.preset=b.dataset.p; if(S.preset!=='custom'){const n=+S.preset; S.to=lastDay; S.from=addD(lastDay,-(n-1));} render();});
   ['from','to'].forEach(id=>document.getElementById(id).addEventListener('change',e=>{S.preset='custom'; S[id]=e.target.value; if(S.from>S.to){ [S.from,S.to]=[S.to,S.from]; } render();}));
   document.getElementById('selYear').addEventListener('change',()=>table());
+  const dp=document.getElementById('dpresets');
+  dp.innerHTML=[['7','최근 7일'],['14','최근 14일'],['30','최근 30일'],['60','최근 60일'],['custom','직접 선택']].map(([k,l])=>`<button class="preset" data-p="${k}">${l}</button>`).join('');
+  dp.addEventListener('click',e=>{const b=e.target.closest('.preset'); if(!b) return; S.d.preset=b.dataset.p; if(S.d.preset!=='custom'){const n=+S.d.preset; S.d.to=lastDay; S.d.from=addD(lastDay,-(n-1));} dtable();});
+  [['dfrom','from'],['dto','to']].forEach(([id,k])=>document.getElementById(id).addEventListener('change',e=>{S.d.preset='custom'; S.d[k]=e.target.value; if(S.d.from>S.d.to){[S.d.from,S.d.to]=[S.d.to,S.d.from];} if(dayList(S.d.from,S.d.to).length>120){S.d.from=addD(S.d.to,-119);} dtable();}));
   const hash=location.hash.replace('#',''); const found=Object.entries(TOK).find(([k,v])=>v===hash); if(found) S.ch=found[0];
   render();
 }
@@ -261,7 +279,7 @@ function render(){
   document.getElementById('rangeHint').textContent=`${nd}일 · 기간 버튼은 마지막 입력일(${lastDay}) 기준 · 일별 데이터 보유 구간 ${firstDay} ~ ${lastDay}`+(have?'':' · 선택 기간에 데이터 없음');
   document.getElementById('secChannels').hidden=S.ch!=='전체';
   history.replaceState(null,'','#'+TOK[S.ch]);
-  kpis(); if(S.ch==='전체') channels(); comment(); charts_(); table(); quality();
+  kpis(); if(S.ch==='전체') channels(); comment(); charts_(); table(); dtable(); quality();
 }
 
 function kpis(){
@@ -400,6 +418,45 @@ function table(){
     if(S.sub) h=`<tbody><tr><td class="dim">${S.sub}의 월별 데이터는 기존 엑셀에 없습니다(외부몰 합계만 존재). 원장 입력 시작 후 자동 집계됩니다.</td></tr></tbody>`;
   }
   document.getElementById('detail').innerHTML=h;
+}
+function dtable(){
+  document.querySelectorAll('#dpresets .preset').forEach(b=>b.setAttribute('aria-pressed',b.dataset.p===S.d.preset));
+  document.getElementById('dfrom').value=S.d.from; document.getElementById('dto').value=S.d.to;
+  const days=dayList(S.d.from,S.d.to); const have=days.filter(d=>allDays.includes(d)).length;
+  document.getElementById('dtblTitle').textContent=`${chName()} 일별 상세`;
+  document.getElementById('dtblSub').textContent=`${S.d.from} ~ ${S.d.to} · ${days.length}일 중 ${have}일 입력됨 · 단위: 원`;
+  document.getElementById('dhint').textContent='상단 기간 선택과 별도로 동작합니다 · 최대 120일';
+  const fmt=n=>n==null?'–':Math.round(n).toLocaleString();
+  const dow=d=>'일월화수목금토'[new Date(d+'T00:00:00Z').getUTCDay()];
+  const cell=(v,opt={})=>`<td class="${v==null?'none':(v<0?'neg':'')} ${opt.dim?'dim':''}">${opt.f?opt.f(v):fmt(v)}</td>`;
+  let cols, get;
+  if(S.ch==='전체'){ cols=CH; get=(d,c)=>D.filter(r=>r.date===d&&grp(r.ch)===c); }
+  else if(S.ch==='외부몰'&&!S.sub){ cols=EXT; get=(d,c)=>D.filter(r=>r.date===d&&r.ch===c); }
+  else { cols=null; }
+  let h, T;
+  if(cols){
+    h=`<thead><tr><th>날짜</th>${cols.map(c=>`<th>${CHV[c]?`<i class="dot" style="background:var(${CHV[c]})"></i>`:''}${c}</th>`).join('')}<th>합계</th><th>주문</th><th>수량</th><th>전일 대비</th></tr></thead><tbody>`;
+    T=Object.fromEntries(cols.map(c=>[c,0])); let Ts=0,To=0,Tq=0,prev=null;
+    days.forEach(d=>{
+      const has=allDays.includes(d);
+      if(!has){ h+=`<tr><td>${d.slice(5)} (${dow(d)})</td><td class="none" colspan="${cols.length+4}">미입력</td></tr>`; prev=null; return; }
+      const rs=D.filter(r=>r.date===d&&inCh(r)); const s=sum(rs,'net'), o=sum(rs,'orders'), q=sum(rs,'qty'); Ts+=s;To+=o;Tq+=q;
+      h+=`<tr><td>${d.slice(5)} (${dow(d)})</td>${cols.map(c=>{const v=sum(get(d,c),'net'); T[c]+=v; return cell(v);}).join('')}<td><b>${fmt(s)}</b></td>${cell(o,{dim:1})}${cell(q,{dim:1})}<td class="${cls(pct(s,prev))}">${prev==null?'–':fp(pct(s,prev))}</td></tr>`; prev=s;
+    });
+    h+=`<tr class="sum"><td>합계</td>${cols.map(c=>`<td>${fmt(T[c])}</td>`).join('')}<td>${fmt(Ts)}</td><td>${fmt(To)}</td><td>${fmt(Tq)}</td><td></td></tr></tbody>`;
+  } else {
+    h=`<thead><tr><th>날짜</th><th>결제금액</th><th>취소환불</th><th>순매출</th><th>주문</th><th>수량</th><th>객단가</th><th>방문자</th><th>전일 대비</th><th>비고</th></tr></thead><tbody>`;
+    let Tp=0,Tc=0,Ts=0,To=0,Tq=0,Tv=0,prev=null;
+    days.forEach(d=>{
+      const rs=D.filter(r=>r.date===d&&inCh(r)); const has=allDays.includes(d);
+      if(!has){ h+=`<tr><td>${d.slice(5)} (${dow(d)})</td><td class="none" colspan="9">미입력</td></tr>`; prev=null; return; }
+      const pay=rs.some(r=>r.pay!=null)?sum(rs,'pay'):null, canc=rs.some(r=>r.cancel!=null)?sum(rs,'cancel'):null, s=sum(rs,'net'), o=sum(rs,'orders'), q=sum(rs,'qty'), v=rs.some(r=>r.visitors!=null)?sum(rs,'visitors'):null;
+      Tp+=pay||0;Tc+=canc||0;Ts+=s;To+=o;Tq+=q;Tv+=v||0;
+      h+=`<tr><td>${d.slice(5)} (${dow(d)})</td>${cell(pay)}${cell(canc)}<td><b>${fmt(s)}</b></td>${cell(o,{dim:1})}${cell(q,{dim:1})}${cell(o?s/o:null,{dim:1})}${cell(v,{dim:1})}<td class="${cls(pct(s,prev))}">${prev==null?'–':fp(pct(s,prev))}</td><td class="dim small">${rs.map(r=>r.note).filter(Boolean)[0]||''}</td></tr>`; prev=s;
+    });
+    h+=`<tr class="sum"><td>합계</td><td>${Tp?fmt(Tp):'–'}</td><td>${Tc?fmt(Tc):'–'}</td><td>${fmt(Ts)}</td><td>${fmt(To)}</td><td>${fmt(Tq)}</td><td>${To?fmt(Ts/To):'–'}</td><td>${Tv?fmt(Tv):'–'}</td><td></td><td></td></tr></tbody>`;
+  }
+  document.getElementById('ddetail').innerHTML=h;
 }
 function quality(){
   const n=[
