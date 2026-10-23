@@ -227,7 +227,7 @@ function unlock(){document.getElementById('gate').hidden=true;document.getElemen
 
 /* ---------- data ---------- */
 let M, D, allDays, lastDay, firstDay, sep, oct25, S;
-function prepare(){ M=DATA.monthly; D=DATA.daily; allDays=[...new Set(D.map(d=>d.date))].sort(); lastDay=allDays[allDays.length-1]; firstDay=allDays[0]; sep=tot(2026)[8]; oct25=tot(2025)[9]; S={ ch:'전체', sub:null, preset:'7', from:addD(lastDay,-6), to:lastDay, d:{preset:'30', from:addD(lastDay,-29), to:lastDay} }; }
+function prepare(){ M=DATA.monthly; D=DATA.daily; allDays=[...new Set(D.map(d=>d.date))].sort(); lastDay=allDays[allDays.length-1]; firstDay=allDays[0]; sep=tot(2026)[8]; oct25=tot(2025)[9]; S={ ch:'전체', sub:null, preset:'7', from:addD(lastDay,-6), to:lastDay, d:{preset:'30', from:(addD(lastDay,-29)<firstDay?firstDay:addD(lastDay,-29)), to:lastDay} }; }
 const m26 = ch => Array.from({length:12},(_,i)=>M.find(r=>r.y===2026&&r.m===i+1&&r.ch===ch));
 const m25 = ch => Array.from({length:12},(_,i)=>M.find(r=>r.y===2025&&r.m===i+1&&r.ch===ch));
 const tot = y => Array.from({length:12},(_,i)=>{const rs=M.filter(r=>r.y===y&&r.m===i+1&&(y===2025?r.ch==='합계':CH.includes(r.ch)));return rs.some(r=>r.sales!=null)?rs.reduce((a,r)=>a+(r.sales||0),0):null});
@@ -259,7 +259,7 @@ function init(){
   document.getElementById('selYear').addEventListener('change',()=>table());
   const dp=document.getElementById('dpresets');
   dp.innerHTML=[['7','최근 7일'],['14','최근 14일'],['30','최근 30일'],['60','최근 60일'],['custom','직접 선택']].map(([k,l])=>`<button class="preset" data-p="${k}">${l}</button>`).join('');
-  dp.addEventListener('click',e=>{const b=e.target.closest('.preset'); if(!b) return; S.d.preset=b.dataset.p; if(S.d.preset!=='custom'){const n=+S.d.preset; S.d.to=lastDay; S.d.from=addD(lastDay,-(n-1));} dtable();});
+  dp.addEventListener('click',e=>{const b=e.target.closest('.preset'); if(!b) return; S.d.preset=b.dataset.p; if(S.d.preset!=='custom'){const n=+S.d.preset; S.d.to=lastDay; S.d.from=addD(lastDay,-(n-1)); if(S.d.from<firstDay) S.d.from=firstDay;} dtable();});
   [['dfrom','from'],['dto','to']].forEach(([id,k])=>document.getElementById(id).addEventListener('change',e=>{S.d.preset='custom'; S.d[k]=e.target.value; if(S.d.from>S.d.to){[S.d.from,S.d.to]=[S.d.to,S.d.from];} if(dayList(S.d.from,S.d.to).length>120){S.d.from=addD(S.d.to,-119);} dtable();}));
   const hash=location.hash.replace('#',''); const found=Object.entries(TOK).find(([k,v])=>v===hash); if(found) S.ch=found[0];
   render();
