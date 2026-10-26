@@ -34,8 +34,8 @@ const FORM_FIELDS = [ // [제목, 도움말, 필수]
 
 /* ============ 1. 최초 설정 ============ */
 function setup() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  ensureSheet_(ss, '원장', LEDGER_HEAD);
+  const ss = SpreadsheetApp.getActiveSpreadsheet(); const t0 = Date.now(); const log = m => console.log(`[${((Date.now() - t0) / 1000).toFixed(1)}s] ${m}`);
+  log('1/6 시트 생성'); ensureSheet_(ss, '원장', LEDGER_HEAD);
   const cm = ensureSheet_(ss, '채널마스터', ['채널코드', '채널명', '그룹']);
   if (cm.getLastRow() < 2) cm.getRange(2, 1, CHANNELS.length, 3).setValues(CHANNELS);
   const tg = ensureSheet_(ss, '월목표', ['연월', '스마트스토어', '쿠팡', '자사몰', '외부몰', '합계']);
@@ -44,15 +44,16 @@ function setup() {
     for (let m = 1; m <= 12; m++) rows.push([`2027-${pad_(m)}`, '', '', '', '', `=SUM(B${rows.length + 2}:E${rows.length + 2})`]);
     tg.getRange(2, 1, rows.length, 6).setValues(rows);
   }
-  ensureSheet_(ss, '설정', ['키', '값', '설명']).getRange(2, 1, 3, 3).setValues([
+  const cfgSh = ensureSheet_(ss, '설정', ['키', '값', '설명']); if (cfgSh.getLastRow() < 2) cfgSh.getRange(2, 1, 3, 3).setValues([
     ['REPORT_HOUR', 8, '데일리 푸시 시각(0~23, 한국시간)'],
     ['DASHBOARD_URL', 'https://leejiho-pslab.github.io/bogobio-dashboard/', '텔레그램 메시지에 붙는 대시보드 링크'],
     ['ALERT_DROP_PCT', -30, '전일/전주 대비 이 % 이하로 떨어지면 특이사항으로 표시'],
   ]);
-  loadHistory_(ss);
-  createForm_(ss);
-  installTriggers_();
-  SpreadsheetApp.getUi().alert('설정 완료.\n1) setSecrets(비밀번호, 봇토큰, 채팅ID) 실행\n2) 배포 → 웹 앱 → URL을 대시보드에 입력\n폼 주소는 "설정" 시트 FORM_URL 참조');
+  log('2/6 과거 데이터 적재'); loadHistory_(ss);
+  log('3/6 구글폼 생성'); createForm_(ss);
+  log('4/6 트리거 등록'); installTriggers_();
+  log('5/6 완료. 폼 주소: ' + getSetting_('FORM_URL'));
+  try { SpreadsheetApp.getUi().alert('설정 완료.\n1) setSecrets(비밀번호, 봇토큰, 채팅ID) 실행\n2) 배포 → 웹 앱 → URL을 대시보드에 입력\n폼 주소는 "설정" 시트 FORM_URL 참조'); } catch (e) {}
 }
 
 function setSecrets(dashboardPassword, telegramBotToken, telegramChatId) {
@@ -110,12 +111,14 @@ function upsertLedger_(rows) {
   const sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('원장');
   const last = sh.getLastRow();
   const keys = last > 1 ? sh.getRange(2, 1, last - 1, 2).getValues().map(r => normDate_(r[0]) + '|' + r[1]) : [];
-  const out = { updated: 0, added: 0 };
+  const out = { updated: 0, added: 0 }; const toAdd = [];
   rows.forEach(r => {
     const i = keys.indexOf(r[0] + '|' + r[1]);
     if (i >= 0) { sh.getRange(i + 2, 1, 1, r.length).setValues([r]); out.updated++; }
-    else { sh.appendRow(r); keys.push(r[0] + '|' + r[1]); out.added++; }
+    else { toAdd.push(r); keys.push(r[0] + '|' + r[1]); out.added++; }
   });
+  if (toAdd.length) sh.getRange(sh.getLastRow() + 1, 1, toAdd.length, LEDGER_HEAD.length).setValues(toAdd); // 한 번에 기록
+  SpreadsheetApp.flush();
   return out;
 }
 
