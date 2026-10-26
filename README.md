@@ -12,3 +12,8 @@ GitHub Pages로 배포되는 정적 대시보드입니다. `index.html` 하나�
 ```
 cd build && node encrypt.js ../data/data.json ../index.html '비밀번호'
 ```
+
+## 구글 시트 연동 (2단계)
+- `apps-script/Code.gs` — 구글 시트에 붙여넣는 자동화 코드(폼 생성·원장 누적·데이터 API·텔레그램)
+- `apps-script/SETUP.md` — 설치 가이드
+- 연동 후 빌드: `cd build && node encrypt.js ../data/data.json ../index.html '비밀번호' '웹앱URL'` (웹앱URL을 넣으면 페이지가 시트에서 데이터를 받아옴)

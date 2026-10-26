@@ -194,7 +194,7 @@ footer{font-size:12px;color:var(--fg-3);display:grid;gap:4px}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
 <script>
 const ENC = /*__ENC__*/;  /* 데이터는 AES-256-GCM 암호문. 비밀번호 없이는 복호화 불가 */
-const CONFIG = { apiUrl: null };
+const CONFIG = { apiUrl: '__API_URL__' || null };  /* 구글 Apps Script 웹앱 주소. 비어 있으면 페이지 내 암호화 데이터 사용 */
 let DATA = null;
 const CH = ['스마트스토어','쿠팡','자사몰','외부몰'];
 const CHV = {'스마트스토어':'--c1','쿠팡':'--c2','자사몰':'--c3','외부몰':'--c4'};
@@ -214,15 +214,20 @@ const grp = n => EXT.includes(n)?'외부몰':n;
 const b64=s=>Uint8Array.from(atob(s),c=>c.charCodeAt(0));
 async function keyFromPw(pw){const km=await crypto.subtle.importKey('raw',new TextEncoder().encode(pw),'PBKDF2',false,['deriveKey']);return crypto.subtle.deriveKey({name:'PBKDF2',salt:b64(ENC.salt),iterations:ENC.iter,hash:'SHA-256'},km,{name:'AES-GCM',length:256},true,['decrypt']);}
 async function decryptWith(key){const pt=await crypto.subtle.decrypt({name:'AES-GCM',iv:b64(ENC.iv)},key,b64(ENC.ct));return JSON.parse(new TextDecoder().decode(pt));}
+async function fetchData(pw){ const r=await fetch(CONFIG.apiUrl,{method:'POST',headers:{'Content-Type':'text/plain;charset=utf-8'},body:JSON.stringify({action:'data',key:pw})}); const j=await r.json(); if(!j.ok) throw new Error(j.error||'unauthorized'); return j; }
 document.getElementById('gateForm').addEventListener('submit',async e=>{e.preventDefault();
-  const btn=e.target.querySelector('button'); btn.disabled=true; btn.textContent='확인 중…';
-  try{ const key=await keyFromPw(document.getElementById('pw').value.trim()); DATA=await decryptWith(key);
-    try{ const raw=await crypto.subtle.exportKey('raw',key); sessionStorage.setItem('bogo_key',btoa(String.fromCharCode(...new Uint8Array(raw)))); }catch(x){}
+  const btn=e.target.querySelector('button'); btn.disabled=true; btn.textContent='확인 중…'; const pw=document.getElementById('pw').value.trim();
+  try{
+    if(CONFIG.apiUrl){ DATA=await fetchData(pw); try{sessionStorage.setItem('bogo_pw',pw)}catch(x){} }
+    else { const key=await keyFromPw(pw); DATA=await decryptWith(key); try{ const raw=await crypto.subtle.exportKey('raw',key); sessionStorage.setItem('bogo_key',btoa(String.fromCharCode(...new Uint8Array(raw)))); }catch(x){} }
     unlock(); }
-  catch(x){ document.getElementById('gateErr').textContent='비밀번호가 맞지 않습니다.'; }
+  catch(x){ document.getElementById('gateErr').textContent=(CONFIG.apiUrl&&String(x).includes('fetch'))?'데이터 서버에 연결할 수 없습니다. 잠시 후 다시 시도하세요.':'비밀번호가 맞지 않습니다.'; }
   btn.disabled=false; btn.textContent='들어가기';
 });
-(async()=>{ try{ const k=sessionStorage.getItem('bogo_key'); if(!k) return; const key=await crypto.subtle.importKey('raw',b64(k),{name:'AES-GCM'},false,['decrypt']); DATA=await decryptWith(key); unlock(); }catch(x){} })();
+(async()=>{ try{
+  if(CONFIG.apiUrl){ const pw=sessionStorage.getItem('bogo_pw'); if(!pw) return; DATA=await fetchData(pw); unlock(); return; }
+  const k=sessionStorage.getItem('bogo_key'); if(!k) return; const key=await crypto.subtle.importKey('raw',b64(k),{name:'AES-GCM'},false,['decrypt']); DATA=await decryptWith(key); unlock(); }catch(x){} })();
+async function reloadData(){ if(!CONFIG.apiUrl) return; const b=document.getElementById('reloadBtn'); b.textContent='불러오는 중…'; try{ DATA=await fetchData(sessionStorage.getItem('bogo_pw')); for(const k in charts){charts[k].destroy(); delete charts[k];} prepare(); init(); }catch(x){ b.textContent='실패'; } }
 function unlock(){document.getElementById('gate').hidden=true;document.getElementById('app').hidden=false;prepare();init();}
 
 /* ---------- data ---------- */
@@ -232,6 +237,7 @@ const m26 = ch => Array.from({length:12},(_,i)=>M.find(r=>r.y===2026&&r.m===i+1&
 const m25 = ch => Array.from({length:12},(_,i)=>M.find(r=>r.y===2025&&r.m===i+1&&r.ch===ch));
 const tot = y => Array.from({length:12},(_,i)=>{const rs=M.filter(r=>r.y===y&&r.m===i+1&&(y===2025?r.ch==='합계':CH.includes(r.ch)));return rs.some(r=>r.sales!=null)?rs.reduce((a,r)=>a+(r.sales||0),0):null});
 let target=null; try{target=+localStorage.getItem('bogo_target')||null}catch(e){}
+function sheetTarget(ym){ const t=(DATA.targets||[]).find(x=>x.ym===ym); return t&&t.total?t.total:null; }
 
 /* ---------- state ---------- */
 const inCh = r => S.ch==='전체' ? true : S.ch==='외부몰' ? (S.sub? r.ch===S.sub : grp(r.ch)==='외부몰') : grp(r.ch)===S.ch;
@@ -245,22 +251,24 @@ const chColor = () => S.ch==='전체'?css('--accent'):css(CHV[S.ch]);
 /* ---------- init ---------- */
 function init(){
   document.getElementById('asof').textContent=DATA.asof;
-  document.getElementById('badges').innerHTML=`<span class="badge">데이터 기준일 ${DATA.asof}</span><span class="badge warn">10/16 이후 미입력</span><span class="badge">11개 채널 · 4개 그룹</span><span class="badge">결제 기준 · 순액</span>`;
+  const gapDays=Math.round((Date.now()-new Date(lastDay+'T00:00:00+09:00'))/864e5)-1;
+  document.getElementById('badges').innerHTML=`<span class="badge">데이터 기준일 ${lastDay}</span>${gapDays>0?`<span class="badge ${gapDays>2?'bad':'warn'}">${gapDays}일 미입력</span>`:'<span class="badge good">최신</span>'}<span class="badge">${CONFIG.apiUrl?'구글 시트 연동 · '+(DATA.generated||''):'내장 데이터'}</span><span class="badge">결제 기준</span>${CONFIG.apiUrl?'<button class="btn" id="reloadBtn">새로고침</button>':''}`;
+  const rb=document.getElementById('reloadBtn'); if(rb) rb.onclick=reloadData;
   const tabs=document.getElementById('tabs');
   tabs.innerHTML=['전체',...CH].map(c=>`<button class="tab" role="tab" data-ch="${c}" style="--tc:var(${CHV[c]||'--accent'})">${CHV[c]?`<i class="dot" style="background:var(${CHV[c]})"></i>`:''}${c}</button>`).join('');
-  tabs.addEventListener('click',e=>{const b=e.target.closest('.tab'); if(!b) return; S.ch=b.dataset.ch; S.sub=null; render();});
+  tabs.onclick=(e=>{const b=e.target.closest('.tab'); if(!b) return; S.ch=b.dataset.ch; S.sub=null; render();});
   const st=document.getElementById('subtabs');
   st.innerHTML=`<button class="chip" data-sub="">외부몰 전체</button>`+EXT.map(c=>`<button class="chip" data-sub="${c}">${c}</button>`).join('');
-  st.addEventListener('click',e=>{const b=e.target.closest('.chip'); if(!b) return; S.sub=b.dataset.sub||null; render();});
+  st.onclick=(e=>{const b=e.target.closest('.chip'); if(!b) return; S.sub=b.dataset.sub||null; render();});
   const pr=document.getElementById('presets');
   pr.innerHTML=[['1','어제'],['7','최근 7일'],['14','최근 14일'],['30','최근 30일'],['custom','직접 선택']].map(([k,l])=>`<button class="preset" data-p="${k}">${l}</button>`).join('');
-  pr.addEventListener('click',e=>{const b=e.target.closest('.preset'); if(!b) return; S.preset=b.dataset.p; if(S.preset!=='custom'){const n=+S.preset; S.to=lastDay; S.from=addD(lastDay,-(n-1));} render();});
-  ['from','to'].forEach(id=>document.getElementById(id).addEventListener('change',e=>{S.preset='custom'; S[id]=e.target.value; if(S.from>S.to){ [S.from,S.to]=[S.to,S.from]; } render();}));
-  document.getElementById('selYear').addEventListener('change',()=>table());
+  pr.onclick=(e=>{const b=e.target.closest('.preset'); if(!b) return; S.preset=b.dataset.p; if(S.preset!=='custom'){const n=+S.preset; S.to=lastDay; S.from=addD(lastDay,-(n-1));} render();});
+  ['from','to'].forEach(id=>document.getElementById(id).onchange=(e=>{S.preset='custom'; S[id]=e.target.value; if(S.from>S.to){ [S.from,S.to]=[S.to,S.from]; } render();}));
+  document.getElementById('selYear').onchange=()=>table();
   const dp=document.getElementById('dpresets');
   dp.innerHTML=[['7','최근 7일'],['14','최근 14일'],['30','최근 30일'],['60','최근 60일'],['custom','직접 선택']].map(([k,l])=>`<button class="preset" data-p="${k}">${l}</button>`).join('');
-  dp.addEventListener('click',e=>{const b=e.target.closest('.preset'); if(!b) return; S.d.preset=b.dataset.p; if(S.d.preset!=='custom'){const n=+S.d.preset; S.d.to=lastDay; S.d.from=addD(lastDay,-(n-1)); if(S.d.from<firstDay) S.d.from=firstDay;} dtable();});
-  [['dfrom','from'],['dto','to']].forEach(([id,k])=>document.getElementById(id).addEventListener('change',e=>{S.d.preset='custom'; S.d[k]=e.target.value; if(S.d.from>S.d.to){[S.d.from,S.d.to]=[S.d.to,S.d.from];} if(dayList(S.d.from,S.d.to).length>120){S.d.from=addD(S.d.to,-119);} dtable();}));
+  dp.onclick=(e=>{const b=e.target.closest('.preset'); if(!b) return; S.d.preset=b.dataset.p; if(S.d.preset!=='custom'){const n=+S.d.preset; S.d.to=lastDay; S.d.from=addD(lastDay,-(n-1)); if(S.d.from<firstDay) S.d.from=firstDay;} dtable();});
+  [['dfrom','from'],['dto','to']].forEach(([id,k])=>document.getElementById(id).onchange=(e=>{S.d.preset='custom'; S.d[k]=e.target.value; if(S.d.from>S.d.to){[S.d.from,S.d.to]=[S.d.to,S.d.from];} if(dayList(S.d.from,S.d.to).length>120){S.d.from=addD(S.d.to,-119);} dtable();}));
   const hash=location.hash.replace('#',''); const found=Object.entries(TOK).find(([k,v])=>v===hash); if(found) S.ch=found[0];
   render();
 }
@@ -293,15 +301,17 @@ function kpis(){
     ['일평균 순매출', won(net/n), `${n}일 평균`],
     ['주문건수', ord.toLocaleString()+'건', havePrev?`<span class="${cls(pct(ord,pord))}">${arrow(pct(ord,pord))} ${fp(pct(ord,pord))}</span> 직전 대비`:'–'],
     ['판매수량 · 객단가', `${Math.round(qty).toLocaleString()}개`, `객단가 ${ord?won(net/ord):'–'}`],
-    ['방문자 (기간)', '–', '일별 방문자는 원장 입력 시작 후 표시'],
+    ['취소·환불 (기간)', (rs.some(r=>r.cancel!=null||r.refund!=null)? won(sum(rs,'cancel')+sum(rs,'refund')) : '–'), rs.some(r=>r.cancel!=null||r.refund!=null)? `취소 ${sum(rs,'cancelCnt')}건 · 환불 ${sum(rs,'refundCnt')}건 · 비중 ${((sum(rs,'cancel')+sum(rs,'refund'))/Math.max(1,net+sum(rs,'cancel')+sum(rs,'refund'))*100).toFixed(1)}%` : '원장 입력 시작 후 표시'],
+    ['방문자 (기간)', rs.some(r=>r.visitors!=null)? sum(rs,'visitors').toLocaleString()+'명' : '–', rs.some(r=>r.visitors!=null)? `전환율 ${(ord/Math.max(1,sum(rs,'visitors'))*100).toFixed(2)}%` : '원장 입력 시작 후 표시'],
+    ['문의 · 리뷰 (기간)', rs.some(r=>r.inq!=null)? `${sum(rs,'inq')}건` : '–', rs.some(r=>r.inq!=null)? `<span class="${(rows(S.to,S.to).reduce((a,r)=>a+(r.unans||0),0))>0?'down':'up'}">미답변 ${rows(S.to,S.to).reduce((a,r)=>a+(r.unans||0),0)}건</span> · 신규리뷰 ${sum(rs,'reviews')}건` : '원장 입력 시작 후 표시'],
   ];
   if(S.ch==='전체'){
-    const mtd=sum(rows(lastDay.slice(0,8)+'01',lastDay),'net'), nD=+lastDay.slice(8), pace=mtd/nD*31, tp=target?mtd/target*100:null;
-    items.push(['10월 월말 페이스', won(pace), `<span class="${cls(pct(pace,sep))}">${arrow(pct(pace,sep))} ${fp(pct(pace,sep))}</span> vs 9월 · 전년 동월 ${fp(pct(pace,oct25))}`]);
-    items.push(['월 목표 달성률', tp? tp.toFixed(1)+'%':'목표 미설정', `<span class="target"><input id="tgt" inputmode="numeric" placeholder="목표(원)" value="${target||''}"> <button class="btn" id="tgtBtn">저장</button></span>`]);
+    const mtd=sum(rows(lastDay.slice(0,8)+'01',lastDay),'net'), nD=+lastDay.slice(8), dimN=new Date(+lastDay.slice(0,4),+lastDay.slice(5,7),0).getDate(), pace=mtd/nD*dimN; const tEff=sheetTarget(lastDay.slice(0,7))||target, tp=tEff?mtd/tEff*100:null;
+    items.push([`${+lastDay.slice(5,7)}월 월말 페이스`, won(pace), `<span class="${cls(pct(pace,sep))}">${arrow(pct(pace,sep))} ${fp(pct(pace,sep))}</span> vs 9월 · 전년 동월 ${fp(pct(pace,oct25))}`]);
+    items.push(['월 목표 달성률', tp? tp.toFixed(1)+'%':'목표 미설정', sheetTarget(lastDay.slice(0,7))? `목표 ${won(tEff)} (월목표 시트)` : `<span class="target"><input id="tgt" inputmode="numeric" placeholder="목표(원)" value="${target||''}"> <button class="btn" id="tgtBtn">저장</button></span>`]);
   } else {
-    const r9=M.find(r=>r.y===2026&&r.m===9&&r.ch===S.ch), mtd=sum(rows(lastDay.slice(0,8)+'01',lastDay),'net'), pace=mtd/(+lastDay.slice(8))*31;
-    items.push([`${S.ch} 10월 월말 페이스`, won(pace), S.sub?'세부 채널은 월별 비교 데이터 없음':`<span class="${cls(pct(pace,r9?.sales))}">${arrow(pct(pace,r9?.sales))} ${fp(pct(pace,r9?.sales))}</span> vs 9월 ${won(r9?.sales)}`]);
+    const r9=M.find(r=>r.y===2026&&r.m===9&&r.ch===S.ch), mtd=sum(rows(lastDay.slice(0,8)+'01',lastDay),'net'), pace=mtd/(+lastDay.slice(8))*new Date(+lastDay.slice(0,4),+lastDay.slice(5,7),0).getDate();
+    items.push([`${S.ch} ${+lastDay.slice(5,7)}월 월말 페이스`, won(pace), S.sub?'세부 채널은 월별 비교 데이터 없음':`<span class="${cls(pct(pace,r9?.sales))}">${arrow(pct(pace,r9?.sales))} ${fp(pct(pace,r9?.sales))}</span> vs 9월 ${won(r9?.sales)}`]);
   }
   document.getElementById('kpis').innerHTML=items.map(([l,v,d])=>`<div class="kpi"><div class="eyebrow">${l}</div><div class="v">${v}</div><div class="d">${d}</div></div>`).join('');
   const tb=document.getElementById('tgtBtn'); if(tb) tb.onclick=()=>{const v=+document.getElementById('tgt').value.replace(/[^0-9]/g,'');try{localStorage.setItem('bogo_target',v||'')}catch(e){};target=v||null;kpis();};
@@ -445,16 +455,16 @@ function dtable(){
     });
     h+=`<tr class="sum"><td>합계</td>${cols.map(c=>`<td>${fmt(T[c])}</td>`).join('')}<td>${fmt(Ts)}</td><td>${fmt(To)}</td><td>${fmt(Tq)}</td><td></td></tr></tbody>`;
   } else {
-    h=`<thead><tr><th>날짜</th><th>결제금액</th><th>취소환불</th><th>순매출</th><th>주문</th><th>수량</th><th>객단가</th><th>방문자</th><th>전일 대비</th><th>비고</th></tr></thead><tbody>`;
-    let Tp=0,Tc=0,Ts=0,To=0,Tq=0,Tv=0,prev=null;
+    h=`<thead><tr><th>날짜</th><th>결제금액</th><th>취소</th><th>환불</th><th>순매출</th><th>주문</th><th>수량</th><th>객단가</th><th>방문자</th><th>문의(미답변)</th><th>리뷰</th><th>전일 대비</th><th>비고</th></tr></thead><tbody>`;
+    let Tp=0,Tc=0,Tr=0,Ts=0,To=0,Tq=0,Tv=0,Ti=0,Trv=0,prev=null;
     days.forEach(d=>{
       const rs=D.filter(r=>r.date===d&&inCh(r)); const has=allDays.includes(d);
-      if(!has){ h+=`<tr><td>${d.slice(5)} (${dow(d)})</td><td class="none" colspan="9">미입력</td></tr>`; prev=null; return; }
-      const pay=rs.some(r=>r.pay!=null)?sum(rs,'pay'):null, canc=rs.some(r=>r.cancel!=null)?sum(rs,'cancel'):null, s=sum(rs,'net'), o=sum(rs,'orders'), q=sum(rs,'qty'), v=rs.some(r=>r.visitors!=null)?sum(rs,'visitors'):null;
-      Tp+=pay||0;Tc+=canc||0;Ts+=s;To+=o;Tq+=q;Tv+=v||0;
-      h+=`<tr><td>${d.slice(5)} (${dow(d)})</td>${cell(pay)}${cell(canc)}<td><b>${fmt(s)}</b></td>${cell(o,{dim:1})}${cell(q,{dim:1})}${cell(o?s/o:null,{dim:1})}${cell(v,{dim:1})}<td class="${cls(pct(s,prev))}">${prev==null?'–':fp(pct(s,prev))}</td><td class="dim small">${rs.map(r=>r.note).filter(Boolean)[0]||''}</td></tr>`; prev=s;
+      if(!has||!rs.length){ h+=`<tr><td>${d.slice(5)} (${dow(d)})</td><td class="none" colspan="12">미입력</td></tr>`; prev=null; return; }
+      const any=k=>rs.some(r=>r[k]!=null); const pay=any('pay')?sum(rs,'pay'):null, canc=any('cancel')?sum(rs,'cancel'):null, ref=any('refund')?sum(rs,'refund'):null, s=sum(rs,'net'), o=sum(rs,'orders'), q=sum(rs,'qty'), v=any('visitors')?sum(rs,'visitors'):null, inq=any('inq')?sum(rs,'inq'):null, un=any('unans')?sum(rs,'unans'):null, rv=any('reviews')?sum(rs,'reviews'):null;
+      Tp+=pay||0;Tc+=canc||0;Tr+=ref||0;Ts+=s;To+=o;Tq+=q;Tv+=v||0;Ti+=inq||0;Trv+=rv||0;
+      h+=`<tr><td>${d.slice(5)} (${dow(d)})</td>${cell(pay)}${cell(canc)}${cell(ref)}<td><b>${fmt(s)}</b></td>${cell(o,{dim:1})}${cell(q,{dim:1})}${cell(o?s/o:null,{dim:1})}${cell(v,{dim:1})}<td class="${un>0?'neg':'dim'}">${inq==null?'–':fmt(inq)+(un!=null?` (${fmt(un)})`:'')}</td>${cell(rv,{dim:1})}<td class="${cls(pct(s,prev))}">${prev==null?'–':fp(pct(s,prev))}</td><td class="dim small">${rs.map(r=>r.note).filter(Boolean)[0]||''}</td></tr>`; prev=s;
     });
-    h+=`<tr class="sum"><td>합계</td><td>${Tp?fmt(Tp):'–'}</td><td>${Tc?fmt(Tc):'–'}</td><td>${fmt(Ts)}</td><td>${fmt(To)}</td><td>${fmt(Tq)}</td><td>${To?fmt(Ts/To):'–'}</td><td>${Tv?fmt(Tv):'–'}</td><td></td><td></td></tr></tbody>`;
+    h+=`<tr class="sum"><td>합계</td><td>${Tp?fmt(Tp):'–'}</td><td>${Tc?fmt(Tc):'–'}</td><td>${Tr?fmt(Tr):'–'}</td><td>${fmt(Ts)}</td><td>${fmt(To)}</td><td>${fmt(Tq)}</td><td>${To?fmt(Ts/To):'–'}</td><td>${Tv?fmt(Tv):'–'}</td><td>${Ti?fmt(Ti):'–'}</td><td>${Trv?fmt(Trv):'–'}</td><td></td><td></td></tr></tbody>`;
   }
   document.getElementById('ddetail').innerHTML=h;
 }
