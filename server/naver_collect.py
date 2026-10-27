@@ -106,7 +106,7 @@ def daily(date):
         items = j.get("contents") or j.get("content") or j.get("data") or []
         inq = len(items); unans = sum(1 for it in items if not (it.get("answered") or it.get("answer")))
     except Exception as e:
-        print("  (상품 문의 조회 실패, 무시) " + str(e)[:150])
+        print("  (QnA lookup failed, ignored) " + str(e)[:150])
     return {"date": date, "ch": "스마트스토어", "pay": round(pay), "orders": len(orders), "qty": round(qty, 1),
             "cancel": round(cancel), "cancelCnt": cancel_cnt, "refund": round(refund), "refundCnt": refund_cnt,
             "inq": inq, "unans": unans, "note": "네이버API(서버)"}
@@ -129,19 +129,19 @@ def main(argv):
     for day in days:
         try:
             r = daily(day); rows.append(r)
-            print(f"{day} 스마트스토어 결제 {r['pay']:,}원 · {r['orders']}건 · 취소 {r['cancel']:,} · 반품 {r['refund']:,} · 문의 {r['inq']}")
+            print(f"{day} SMARTSTORE paid {r['pay']:,} KRW | orders {r['orders']} | qty {r['qty']} | cancel {r['cancel']:,} ({r['cancelCnt']}) | return {r['refund']:,} ({r['refundCnt']}) | QnA {r['inq']}")
         except Exception as e:
-            errors.append(f"{day}: {e}"); print("오류 " + errors[-1])
+            errors.append(f"{day}: {e}"); print("ERROR " + errors[-1])
     if test:
-        print("(--test: 시트에 기록하지 않음)"); return 1 if errors else 0
+        print("(--test: not written to the sheet)"); return 1 if errors else 0
     if rows:
-        print("시트 기록:", sheet("submit", rows=rows, method="API(서버)", merge=True))
+        print("Sheet result:", sheet("submit", rows=rows, method="API(서버)", merge=True))
     if errors:
         try:
             sheet("alert", text="⚠️ <b>스마트스토어 자동 수집 오류</b>\n" + "\n".join(errors)[:1500] +
                   "\n(IP 변경·시크릿 재발급·인증 기한 만료 여부 확인)")
         except Exception as e:
-            print("알림 실패:", e)
+            print("alert failed:", e)
     return 1 if errors else 0
 
 
