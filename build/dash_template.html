@@ -218,8 +218,9 @@ async function fetchData(pw){ const r=await fetch(CONFIG.apiUrl,{method:'POST',h
 document.getElementById('gateForm').addEventListener('submit',async e=>{e.preventDefault();
   const btn=e.target.querySelector('button'); btn.disabled=true; btn.textContent='확인 중…'; const pw=document.getElementById('pw').value.trim();
   try{
-    if(CONFIG.apiUrl){ DATA=await fetchData(pw); try{sessionStorage.setItem('bogo_pw',pw)}catch(x){} }
-    else { const key=await keyFromPw(pw); DATA=await decryptWith(key); try{ const raw=await crypto.subtle.exportKey('raw',key); sessionStorage.setItem('bogo_key',btoa(String.fromCharCode(...new Uint8Array(raw)))); }catch(x){} }
+    let viaApi=false;
+    if(CONFIG.apiUrl){ try{ DATA=await fetchData(pw); viaApi=true; try{sessionStorage.setItem('bogo_pw',pw)}catch(x){} }catch(err){ if(String(err).includes('unauthorized')) throw err; console.warn('시트 연결 실패, 내장 데이터 사용',err); } }
+    if(!viaApi){ const key=await keyFromPw(pw); DATA=await decryptWith(key); DATA.offline=!!CONFIG.apiUrl; try{ const raw=await crypto.subtle.exportKey('raw',key); sessionStorage.setItem('bogo_key',btoa(String.fromCharCode(...new Uint8Array(raw)))); }catch(x){} }
     unlock(); }
   catch(x){ document.getElementById('gateErr').textContent=(CONFIG.apiUrl&&String(x).includes('fetch'))?'데이터 서버에 연결할 수 없습니다. 잠시 후 다시 시도하세요.':'비밀번호가 맞지 않습니다.'; }
   btn.disabled=false; btn.textContent='들어가기';
@@ -252,7 +253,7 @@ const chColor = () => S.ch==='전체'?css('--accent'):css(CHV[S.ch]);
 function init(){
   document.getElementById('asof').textContent=DATA.asof;
   const gapDays=Math.round((Date.now()-new Date(lastDay+'T00:00:00+09:00'))/864e5)-1;
-  document.getElementById('badges').innerHTML=`<span class="badge">데이터 기준일 ${lastDay}</span>${gapDays>0?`<span class="badge ${gapDays>2?'bad':'warn'}">${gapDays}일 미입력</span>`:'<span class="badge good">최신</span>'}<span class="badge">${CONFIG.apiUrl?'구글 시트 연동 · '+(DATA.generated||''):'내장 데이터'}</span><span class="badge">결제 기준</span>${CONFIG.apiUrl?'<button class="btn" id="reloadBtn">새로고침</button>':''}`;
+  document.getElementById('badges').innerHTML=`<span class="badge">데이터 기준일 ${lastDay}</span>${gapDays>0?`<span class="badge ${gapDays>2?'bad':'warn'}">${gapDays}일 미입력</span>`:'<span class="badge good">최신</span>'}<span class="badge ${DATA.offline?'warn':''}">${DATA.offline?'시트 연결 실패 · 내장 데이터 표시':(CONFIG.apiUrl?'구글 시트 연동 · '+(DATA.generated||''):'내장 데이터')}</span><span class="badge">결제 기준</span>${CONFIG.apiUrl&&!DATA.offline?'<button class="btn" id="reloadBtn">새로고침</button>':''}`;
   const rb=document.getElementById('reloadBtn'); if(rb) rb.onclick=reloadData;
   const tabs=document.getElementById('tabs');
   tabs.innerHTML=['전체',...CH].map(c=>`<button class="tab" role="tab" data-ch="${c}" style="--tc:var(${CHV[c]||'--accent'})">${CHV[c]?`<i class="dot" style="background:var(${CHV[c]})"></i>`:''}${c}</button>`).join('');
