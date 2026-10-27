@@ -156,7 +156,10 @@ function handle_(p) {
       case 'data': return out(Object.assign({ ok: true }, buildData_()));
       case 'submit': { // rows: [{date, ch, pay, orders, qty, cancel, cancelCnt, refund, refundCnt, visitors, inq, unans, reviews, note}]
         const rows = (p.rows || []).map(r => buildRow_(Object.assign({}, r, { date: normDate_(r.date) }), p.method || 'Cowork 스킬'));
+        if (p.merge && typeof mergeLedger_ === 'function') { mergeLedger_(rows); return out({ ok: true, merged: rows.length }); }
         return out(Object.assign({ ok: true }, upsertLedger_(rows)));
+      }
+      case 'alert': { return out({ ok: true, sent: tg_(String(p.text || '').slice(0, 3500)) });
       }
       case 'push': return out({ ok: true, sent: sendDaily_(p.date) });
       case 'weekly': return out({ ok: true, sent: sendWeekly_() });
