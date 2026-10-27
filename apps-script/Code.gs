@@ -135,7 +135,14 @@ function upsertLedger_(rows) {
 }
 
 /* ============ 3. 웹 API (대시보드 · 스킬) ============ */
-function doGet(e) { return handle_(e.parameter || {}); }
+function doGet(e) {
+  const p = e.parameter || {};
+  if (p.code && String(p.state || '').indexOf('cafe24_') === 0) {
+    const msg = (typeof cafe24Callback_ === 'function') ? cafe24Callback_(p) : 'Apis.gs가 없습니다';
+    return HtmlService.createHtmlOutput('<meta charset="utf-8"><div style="font:16px sans-serif;padding:40px">' + msg + '</div>');
+  }
+  return handle_(p);
+}
 function doPost(e) {
   let body = {}; try { body = JSON.parse(e.postData.contents || '{}'); } catch (x) {}
   return handle_(Object.assign({}, e.parameter || {}, body));
