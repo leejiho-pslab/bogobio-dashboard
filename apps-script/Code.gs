@@ -176,23 +176,40 @@ function buildData_() {
   const ss = getSS_();
   const led = readLedger_();
   const daily = led.map(r => ({ date: r.date, ch: r.ch, pay: nz_(r.pay), orders: nz_(r.orders), qty: nz_(r.qty), cancel: nz_(r.cancel), cancelCnt: nz_(r.cancelCnt), refund: nz_(r.refund), refundCnt: nz_(r.refundCnt), net: nz_(r.net), visitors: nz_(r.visitors), inq: nz_(r.inq), unans: nz_(r.unans), reviews: nz_(r.reviews), note: r.note, method: r.method }));
-  // 월별: 원장에 해당 월 데이터가 있으면 원장 집계, 없으면 과거 월별 표
-  const hist = sheetObjects_(ss.getSheetByName('월별실적_과거'));
-  const ledgerMonths = new Set(daily.map(d => d.date.slice(0, 7)));
-  const monthly = hist.filter(h => !ledgerMonths.has(`${h.연}-${pad_(h.월)}`)).map(h => ({ y: +h.연, m: +h.월, ch: h.채널명, sales: num_(h.매출), orders: num_(h.주문건수), qty: num_(h.판매개수), visitors: num_(h.방문자) }));
-  ledgerMonths.forEach(ym => {
-    const [y, m] = ym.split('-').map(Number);
-    CH_GROUPS.forEach(g => {
-      const rs = daily.filter(d => d.date.slice(0, 7) === ym && GROUP_OF[d.ch] === g);
-      if (!rs.length) return;
-      const s = k => rs.reduce((a, r) => a + (r[k] || 0), 0);
-      monthly.push({ y, m, ch: g, sales: s('net'), orders: s('orders'), qty: s('qty'), visitors: rs.some(r => r.visitors != null) ? s('visitors') : null });
-    });
-  });
+  // 월별: 채널 그룹마다 원장에 그 달 데이터가 있으면 원장 집계, 없으면 과거 월별 표 (그룹 단위로 교체)
+  const monthly = mergedMonthly_(daily, sheetObjects_(ss.getSheetByName('월별실적_과거')));
   const targets = sheetObjects_(ss.getSheetByName('월목표')).filter(t => t.연월).map(t => ({ ym: t.연월, 스마트스토어: num_(t.스마트스토어), 쿠팡: num_(t.쿠팡), 자사몰: num_(t.자사몰), 외부몰: num_(t.외부몰), total: num_(t.합계) }));
   const mis = ss.getSheetByName('불일치기록'); const mismatch = mis && mis.getLastRow() > 1 ? mis.getRange(2, 1, mis.getLastRow() - 1, 7).getValues() : [];
   const asof = daily.length ? daily.map(d => d.date).sort().pop() : null;
   return { asof, generated: Utilities.formatDate(new Date(), TZ, 'yyyy-MM-dd HH:mm'), monthly, daily, targets, mismatch, channels: CHANNELS.map(c => ({ code: c[0], name: c[1], group: c[2] })) };
+}
+
+
+/** 과거 월별 표 + 원장 집계를 채널 그룹 단위로 합침. 2025년 '합계' 행은 교체된 그룹만큼 보정 */
+function mergedMonthly_(daily, hist) {
+  const agg = {}; // ym|group -> sums
+  daily.forEach(d => { const g = GROUP_OF[d.ch]; if (!g) return; const k = d.date.slice(0, 7) + '|' + g;
+    const a = agg[k] || (agg[k] = { sales: 0, orders: 0, qty: 0, visitors: null });
+    a.sales += d.net || 0; a.orders += d.orders || 0; a.qty += d.qty || 0; if (d.visitors != null) a.visitors = (a.visitors || 0) + d.visitors; });
+  const out = []; const histKeys = new Set();
+  const byYm = {};
+  hist.forEach(h => { const ym = `${h.연}-${pad_(h.월)}`; (byYm[ym] = byYm[ym] || []).push(h); });
+  Object.keys(byYm).forEach(ym => {
+    const [y, m] = ym.split('-').map(Number); let delta = 0; let sumRow = null;
+    byYm[ym].forEach(h => {
+      if (h.채널명 === '합계') { sumRow = h; return; }
+      const a = agg[ym + '|' + h.채널명]; histKeys.add(ym + '|' + h.채널명);
+      if (a) { delta += a.sales - (num_(h.매출) || 0); out.push({ y, m, ch: h.채널명, sales: a.sales, orders: a.orders, qty: a.qty, visitors: a.visitors != null ? a.visitors : num_(h.방문자) }); }
+      else out.push({ y, m, ch: h.채널명, sales: num_(h.매출), orders: num_(h.주문건수), qty: num_(h.판매개수), visitors: num_(h.방문자) });
+    });
+    if (sumRow) {
+      CH_GROUPS.forEach(g => { const a = agg[ym + '|' + g]; if (a && !histKeys.has(ym + '|' + g)) delta += a.sales; });
+      out.push({ y, m, ch: '합계', sales: num_(sumRow.매출) == null ? null : num_(sumRow.매출) + delta, orders: null, qty: null, visitors: num_(sumRow.방문자) });
+    }
+  });
+  Object.keys(agg).forEach(k => { if (histKeys.has(k)) return; const [ym, g] = k.split('|'); const [y, m] = ym.split('-').map(Number); const a = agg[k];
+    out.push({ y, m, ch: g, sales: a.sales, orders: a.orders, qty: a.qty, visitors: a.visitors }); });
+  return out;
 }
 
 /* ============ 4. 텔레그램 ============ */
@@ -286,13 +303,12 @@ function missingChannels_(dateStr) {
   return CHANNELS.map(c => c[1]).filter(n => !have.has(n));
 }
 function monthTotal_(ym, group) {
-  const led = readLedger_().filter(r => r.date.slice(0, 7) === ym && (!group || GROUP_OF[r.ch] === group));
-  if (led.length) return led.reduce((a, r) => a + (nz_(r.net) || 0), 0);
-  const hist = sheetObjects_(getSS_().getSheetByName('월별실적_과거')).filter(h => `${h.연}-${pad_(h.월)}` === ym);
-  if (!hist.length) return null;
-  const rows = group ? hist.filter(h => h.채널명 === group) : hist.filter(h => CH_GROUPS.includes(h.채널명) || (h.채널명 === '합계'));
-  if (!group && rows.some(h => h.채널명 === '합계')) return num_(rows.find(h => h.채널명 === '합계').매출);
-  return rows.reduce((a, h) => a + (num_(h.매출) || 0), 0) || null;
+  const rows = mergedMonthly_(readLedger_().map(r => ({ date: r.date, ch: r.ch, net: nz_(r.net), orders: nz_(r.orders), qty: nz_(r.qty), visitors: nz_(r.visitors) })),
+    sheetObjects_(getSS_().getSheetByName('월별실적_과거'))).filter(r => `${r.y}-${pad_(r.m)}` === ym);
+  if (!rows.length) return null;
+  if (group) { const r = rows.find(x => x.ch === group); return r ? r.sales : null; }
+  const sum = rows.find(x => x.ch === '합계'); if (sum && sum.sales != null) return sum.sales;
+  return rows.filter(x => CH_GROUPS.includes(x.ch)).reduce((a, x) => a + (x.sales || 0), 0) || null;
 }
 function targetFor_(ym) { const t = sheetObjects_(getSS_().getSheetByName('월목표')).find(x => x.연월 === ym); return t && num_(t.합계) ? num_(t.합계) : null; }
 function readLedger_() {

@@ -32,12 +32,20 @@ def http(method, url, data=None, headers=None, form=False):
         else:
             body = json.dumps(data, ensure_ascii=False).encode()
             headers.setdefault("Content-Type", "application/json")
-    req = urllib.request.Request(url, data=body, headers=headers, method=method)
-    try:
-        with urllib.request.urlopen(req, timeout=60) as r:
-            return json.loads(r.read().decode() or "{}")
-    except urllib.error.HTTPError as e:
-        raise RuntimeError(f"{url.split('?')[0]} {e.code} {e.read().decode()[:300]}")
+    for attempt in range(6):
+        req = urllib.request.Request(url, data=body, headers=headers, method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=120) as r:
+                return json.loads(r.read().decode() or "{}")
+        except urllib.error.HTTPError as e:
+            msg = e.read().decode()[:300]
+            if e.code in (429, 500, 502, 503, 504) and attempt < 5:  # 호출 한도·일시 오류 → 잠시 후 재시도
+                time.sleep(2 * (attempt + 1)); continue
+            raise RuntimeError(f"{url.split('?')[0]} {e.code} {msg}")
+        except (urllib.error.URLError, TimeoutError) as e:
+            if attempt < 5:
+                time.sleep(3 * (attempt + 1)); continue
+            raise RuntimeError(f"{url.split('?')[0]} network {e}")
 
 
 def token():
@@ -73,8 +81,12 @@ def to_kst_date(iso):
 
 def changed_ids(start, end):
     """[start, end) 사이에 '마지막 상태 변경'이 일어난 상품주문 ID. API 한 번에 최대 24시간이라 하루씩 나눠 조회."""
-    ids, cur = set(), start
+    ids, cur, n = set(), start, 0
+    total = max(1, int((end - start).total_seconds() // 86400) + 1)
     while cur < end:
+        n += 1
+        if total > 7 and (n % 30 == 0 or n == 1):
+            print(f"  scanning changes {cur.strftime('%Y-%m-%d')} ... ({n}/{total} days, {len(ids)} items)", flush=True)
         frm, to = cur, min(cur + timedelta(hours=24), end)
         f = frm.isoformat(timespec="milliseconds")
         for _ in range(200):
@@ -108,6 +120,7 @@ def collect(days, detail=False):
     첫날 00시부터 '지금'까지 변경된 상품주문을 모두 모은 뒤 결제일·취소일·반품일로 나눠 담는다."""
     start = kst_day(days[0]); now = datetime.now(KST)
     ids = list(changed_ids(start, now))
+    print(f"  found {len(ids)} product orders, fetching details ...", flush=True)
     B = {d: {"pay": 0.0, "qty": 0.0, "orders": set(), "cancel": 0.0, "cancelCnt": 0, "refund": 0.0, "refundCnt": 0, "lines": []} for d in days}
     for i in range(0, len(ids), 300):
         for x in npost("/v1/pay-order/seller/product-orders/query", {"productOrderIds": ids[i:i + 300]}).get("data") or []:
@@ -125,7 +138,7 @@ def collect(days, detail=False):
                 B[rd]["refund"] += amt; B[rd]["refundCnt"] += 1
     rows = []
     for d in days:
-        b = B[d]; inq, unans = qna(d)
+        b = B[d]; inq, unans = qna(d) if len(days) <= 31 else ("", "")  # 긴 소급 수집 때는 문의 조회 생략
         rows.append({"date": d, "ch": "스마트스토어", "pay": round(b["pay"]), "orders": len(b["orders"]), "qty": round(b["qty"], 1),
                      "cancel": round(b["cancel"]), "cancelCnt": b["cancelCnt"], "refund": round(b["refund"]), "refundCnt": b["refundCnt"],
                      "inq": inq, "unans": unans, "note": "네이버API(서버)", "_lines": b["lines"]})
@@ -149,6 +162,8 @@ def main(argv):
     try:
         rows = collect(days)
         for r in rows:
+            if len(rows) > 40 and not r["pay"] and not r["cancel"] and "--detail" not in argv:
+                continue
             print(f"{r['date']} SMARTSTORE paid {r['pay']:,} KRW | orders {r['orders']} | qty {r['qty']} | cancel {r['cancel']:,} ({r['cancelCnt']}) | return {r['refund']:,} ({r['refundCnt']}) | QnA {r['inq']}")
             if "--detail" in argv:
                 print("\n".join(r["_lines"]) or "    (no paid orders)")
@@ -159,7 +174,9 @@ def main(argv):
     if test:
         print("(--test: not written to the sheet)"); return 1 if errors else 0
     if rows:
-        print("Sheet result:", sheet("submit", rows=rows, method="API(서버)", merge=True))
+        for i in range(0, len(rows), 60):  # 60일씩 나눠 전송
+            print(f"Sheet result ({rows[i]['date']}~{rows[min(i + 59, len(rows) - 1)]['date']}):",
+                  sheet("submit", rows=rows[i:i + 60], method="API(서버)", merge=True), flush=True)
     if errors:
         try:
             sheet("alert", text="⚠️ <b>스마트스토어 자동 수집 오류</b>\n" + "\n".join(errors)[:1500] +
