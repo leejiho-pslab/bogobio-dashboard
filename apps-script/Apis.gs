@@ -178,6 +178,17 @@ function cafe24Get_(path) {
   if (res.getResponseCode() >= 300) throw new Error(path.split('?')[0] + ' ' + res.getResponseCode() + ' ' + res.getContentText().slice(0, 200));
   return JSON.parse(res.getContentText());
 }
+
+/** 카페24 주문의 '최초 결제금액'(결제 기준). 취소돼도 결제 당시 금액 유지, 원화(KRW) 주문만 */
+function cafe24Amt_(o) {
+  if (o.currency && o.currency !== 'KRW') return 0;
+  const a = o.initial_order_amount || o.actual_order_amount || {};
+  const n = k => Number(a[k] || 0) || 0;
+  const v = n('order_price_amount') + n('shipping_fee') - n('coupon_discount_price') - n('coupon_shipping_fee_amount') - n('membership_discount_amount')
+    - n('shipping_fee_discount_amount') - n('set_product_discount_amount') - n('app_discount_amount') - n('market_other_discount_amount')
+    - n('points_spent_amount') - n('credits_spent_amount');
+  return v > 0 ? v : Number(o.payment_amount || 0) || 0;
+}
 function cafe24Orders_(date, dateType) {
   const out = [];
   CAFE24_SHOPS.forEach(shop => {
@@ -193,13 +204,13 @@ function cafe24Daily_(date) {
   const paid = cafe24Orders_(date, 'pay_date');
   const num = v => Number(String(v || 0).replace(/[^0-9.\-]/g, '')) || 0;
   let pay = 0, qty = 0;
-  paid.forEach(o => { pay += num(o.payment_amount != null ? o.payment_amount : o.actual_order_amount && o.actual_order_amount.payment_amount);
-    (o.items || []).forEach(it => qty += num(it.quantity)); });
+  const krw = paid.filter(o => !o.currency || o.currency === 'KRW');
+  krw.forEach(o => { pay += cafe24Amt_(o); (o.items || []).forEach(it => qty += num(it.quantity)); });
   let cancel = '', cancelCnt = '', refund = '', refundCnt = '';
-  try { const c = cafe24Orders_(date, 'cancel_date'); cancelCnt = c.length; cancel = c.reduce((a, o) => a + num(o.payment_amount), 0); } catch (e) { console.log('자사몰 취소 조회 실패(무시): ' + e.message); }
-  try { const r = [].concat(...CAFE24_SHOPS.map(s => cafe24Get_(`/admin/refunds?shop_no=${s}&start_date=${date}&end_date=${date}&date_type=refund_date&limit=500`).refunds || []));
+  try { const c = cafe24Orders_(date, 'cancel_date').filter(o => !o.currency || o.currency === 'KRW'); cancelCnt = c.length; cancel = c.reduce((a, o) => a + cafe24Amt_(o), 0); } catch (e) { console.log('자사몰 취소 조회 실패(무시): ' + e.message); }
+  if (false) try { const r = [].concat(...CAFE24_SHOPS.map(s => cafe24Get_(`/admin/refunds?shop_no=${s}&start_date=${date}&end_date=${date}&date_type=refund_date&limit=500`).refunds || []));
     refundCnt = r.length; refund = r.reduce((a, x) => a + num(x.actual_refund_amount || x.refund_amount), 0); } catch (e) { console.log('자사몰 환불 조회 실패(무시): ' + e.message); }
-  return { date, ch: '자사몰', pay, orders: paid.length, qty, cancel, cancelCnt, refund, refundCnt, note: '카페24API' };
+  return { date, ch: '자사몰', pay: Math.round(pay), orders: krw.length, qty, cancel, cancelCnt, refund, refundCnt, note: '카페24API' };
 }
 
 
@@ -243,15 +254,15 @@ function cafe24Month_(start, end) {
         const l = j.orders || []; out.push(...l); if (l.length < 1000) break; }
     });
     return out; };
-  list('pay_date', '&embed=items').forEach(o => { const d = day(o.payment_date || o.order_date); if (!days[d]) return;
-    days[d].pay += num(o.payment_amount != null ? o.payment_amount : (o.actual_order_amount || {}).payment_amount);
+  list('pay_date', '&embed=items').forEach(o => { const d = day(o.payment_date || o.order_date); if (!days[d] || (o.currency && o.currency !== 'KRW')) return;
+    days[d].pay += cafe24Amt_(o);
     days[d].orders++; (o.items || []).forEach(it => days[d].qty += num(it.quantity)); });
-  try { list('cancel_date').forEach(o => { const d = day(o.cancel_date); if (!days[d]) return; days[d].cancel += num(o.payment_amount); days[d].cancelCnt++; }); }
+  try { list('cancel_date').forEach(o => { const d = day(o.cancel_date); if (!days[d] || (o.currency && o.currency !== 'KRW')) return; days[d].cancel += cafe24Amt_(o); days[d].cancelCnt++; }); }
   catch (e) { console.log('취소 조회 생략: ' + e.message); }
-  try { [].concat(...CAFE24_SHOPS.map(s => cafe24Get_(`/admin/refunds?shop_no=${s}&start_date=${start}&end_date=${end}&date_type=refund_date&limit=500`).refunds || [])).forEach(r => {
+  if (false) try { [].concat(...CAFE24_SHOPS.map(s => cafe24Get_(`/admin/refunds?shop_no=${s}&start_date=${start}&end_date=${end}&date_type=refund_date&limit=500`).refunds || [])).forEach(r => {
       const d = day(r.refund_date); if (!days[d]) return; days[d].refund += num(r.actual_refund_amount || r.refund_amount); days[d].refundCnt++; }); }
   catch (e) { console.log('환불 조회 생략: ' + e.message); }
-  const rows = Object.values(days).map(r => buildRow_(r, 'API'));
+  const rows = Object.values(days).map(r => { r.pay = Math.round(r.pay); r.cancel = Math.round(r.cancel); r.refund = Math.round(r.refund); return buildRow_(r, 'API'); });
   mergeLedger_(rows);
   return rows.length;
 }
