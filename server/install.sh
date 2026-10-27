@@ -15,14 +15,14 @@ echo "[2/4] Downloading collector ..."
 curl -fsSL "$RAW/naver_collect.py" -o naver_collect.py
 chmod 700 naver_collect.py
 
-echo "[3/4] Settings (secret/password are hidden while typing)"
+echo "[3/4] Settings"
 if [ -f config.json ]; then
   read -r -p "  Settings already exist. Re-enter? (y/N) " redo
 else redo=y; fi
 if [[ "${redo,,}" == "y" ]]; then
   read -r    -p "  NAVER Application ID     : " NID
-  read -r -s -p "  NAVER Application Secret : " NSEC; echo "  (secret received: ${#NSEC} chars)"
-  read -r -s -p "  Dashboard password       : " KEY; echo "  (password received: ${#KEY} chars)"
+  read -r -p "  NAVER Application Secret : " NSEC; echo "  (secret received: ${#NSEC} chars)"
+  read -r -p "  Dashboard password       : " KEY; echo "  (password received: ${#KEY} chars)"
   API="https://script.google.com/macros/s/AKfycbzGB6M89TvVtns8gHwIi9_tfFeANDRI2DFVAQyh9MjXvDaGTd1ujzIXlqgvY75YYuZN_w/exec"
   umask 077
   NID="$NID" NSEC="$NSEC" KEY="$KEY" API="$API" python3 - <<'PY'
