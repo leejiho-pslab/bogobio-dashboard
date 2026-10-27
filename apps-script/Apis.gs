@@ -118,11 +118,15 @@ function naverDaily_(date) {
     });
   }
   let inq = '', unans = '';
-  try { // 고객 문의 (실패해도 매출 수집은 계속)
-    const q = naverGet_(`/v1/pay-user/inquiries?startSearchDate=${date}&endSearchDate=${date}&page=1&size=200`);
-    const items = q.content || q.data || [];
-    inq = items.length; unans = items.filter(it => !it.answered).length;
-  } catch (e) { console.log('스마트스토어 문의 조회 실패(무시): ' + e.message); }
+  const tries = [ // 상품 문의 → 고객 문의 순서로 시도 (실패해도 매출 수집은 계속)
+    `/v1/contents/qnas?fromDate=${encodeURIComponent(kst_(date, '00'))}&toDate=${encodeURIComponent(date + 'T23:59:59.999+09:00')}&page=1&size=100`,
+    `/v1/pay-user/inquiries?startSearchDate=${date}&endSearchDate=${date}&page=1&size=200`];
+  for (const path of tries) {
+    try {
+      const q = naverGet_(path); const items = q.contents || q.content || q.data || [];
+      inq = (inq || 0) + items.length; unans = (unans || 0) + items.filter(it => !(it.answered || it.answer)).length;
+    } catch (e) { console.log('스마트스토어 문의 조회 실패(무시): ' + e.message); }
+  }
   return { date, ch: '스마트스토어', pay, orders: orders.size, qty, cancel, cancelCnt, refund, refundCnt, inq, unans, note: '네이버API' };
 }
 
