@@ -91,6 +91,17 @@ button.btn{cursor:pointer}
 .period.sm .preset[aria-pressed="true"]{background:var(--accent);color:#fff}
 .period.sm .range input{width:140px;background:var(--surface)}
 td.neg{color:var(--bad)}td.none{color:var(--fg-3);font-style:italic}
+.tab.rep{color:var(--fg-2)}.tab.rep[aria-selected="true"]{color:var(--fg);border-bottom-color:var(--brand)}
+.tabsep{width:1px;background:var(--line);margin:8px 6px}
+.rep-head{display:flex;flex-wrap:wrap;gap:10px 16px;align-items:flex-end;justify-content:space-between}
+.rep-head h2{font-size:20px}
+.rep-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,300px),1fr));gap:16px}
+.rep-card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:16px;display:grid;gap:10px;box-shadow:var(--shadow);border-top:3px solid var(--rc)}
+.rep-card h3{font-size:14px;display:flex;gap:8px;align-items:center}
+.rep-card ul{margin:0;padding-left:18px;display:grid;gap:6px;font-size:13.5px;line-height:1.55}
+.rep-summary{font-size:15px;line-height:1.7;background:var(--surface-2);border-radius:var(--r);padding:14px 16px}
+.rep-summary b{font-weight:700}
+td.up{color:var(--good)}td.down{color:var(--bad)}
 .legend{display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--fg-2)}
 footer{font-size:12px;color:var(--fg-3);display:grid;gap:4px}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
@@ -117,6 +128,24 @@ footer{font-size:12px;color:var(--fg-3);display:grid;gap:4px}
   <nav class="tabs" id="tabs" role="tablist" aria-label="채널"></nav>
   <div class="subtabs" id="subtabs" hidden></div>
 
+  <section class="panel" id="reportView" hidden>
+    <div class="rep-head"><div><div class="eyebrow" id="repEyebrow"></div><h2 id="repTitle"></h2><div class="small muted" id="repSub"></div></div>
+      <div class="controls"><label class="small muted" for="repSel">지난 보고서</label><select id="repSel"></select></div></div>
+    <div class="rep-summary" id="repSummary"></div>
+    <div class="kpis" id="repKpis"></div>
+    <div class="grid2">
+      <div class="panel" style="box-shadow:none"><div class="panel-h"><h2>일별 순매출 · 직전 기간 비교</h2><span class="small muted">단위: 만원</span></div><div class="chart" id="repChartWrap"><canvas id="cRep"></canvas></div></div>
+      <div class="panel" style="box-shadow:none"><div class="panel-h"><h2>채널별 비교</h2><span class="small muted" id="repTblSub"></span></div><div class="tbl"><table id="repTbl"></table></div></div>
+    </div>
+    <div class="rep-grid">
+      <div class="rep-card" style="--rc:var(--good)"><h3>👍 잘된 점</h3><ul id="repGood"></ul></div>
+      <div class="rep-card" style="--rc:var(--bad)"><h3>⚠️ 아쉬운 점</h3><ul id="repBad"></ul></div>
+      <div class="rep-card" style="--rc:var(--accent)"><h3 id="repFocusTitle">🎯 집중할 사항</h3><ul id="repFocus"></ul></div>
+    </div>
+    <div class="small muted" id="repNote"></div>
+  </section>
+
+  <div id="mainView" style="display:grid;gap:18px">
   <section class="period">
     <div class="presets" id="presets" role="group" aria-label="기간 선택"></div>
     <div class="range"><span class="lab">기간</span><input type="date" id="from"><span>~</span><input type="date" id="to"><span class="hint" id="rangeHint"></span></div>
@@ -184,6 +213,7 @@ footer{font-size:12px;color:var(--fg-3);display:grid;gap:4px}
     <div class="panel-h"><h2>데이터 품질 · 확인 필요</h2><span class="small muted">원장 기준</span></div>
     <div class="notes" id="quality"></div>
   </section>
+  </div>
 
   <footer>
     <div>출처: 보고바이오 매출정보 엑셀(월별집계 시트를 정본으로) → 누적 원장 v1 · 데이터 기준일 <span id="asof"></span></div>
@@ -199,7 +229,8 @@ let DATA = null;
 const CH = ['스마트스토어','쿠팡','자사몰','외부몰'];
 const CHV = {'스마트스토어':'--c1','쿠팡':'--c2','자사몰':'--c3','외부몰':'--c4'};
 const EXT = ['G마켓/옥션','SSG','11번가','롯데온','아난티/무케렌시아','국군복지몰','공구','오프라인'];
-const TOK = {'전체':'all','스마트스토어':'nss','쿠팡':'cpg','자사몰':'own','외부몰':'ext'};
+const TOK = {'전체':'all','스마트스토어':'nss','쿠팡':'cpg','자사몰':'own','외부몰':'ext','주간 보고서':'weekly','월간 보고서':'monthly'};
+const REPORTS = ['주간 보고서','월간 보고서'];
 const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
 const won = n => n==null?'–':(Math.abs(n)>=1e8? (n/1e8).toFixed(2)+'억' : Math.round(n/1e4).toLocaleString()+'만');
 const pct = (a,b) => (b? ((a-b)/Math.abs(b)*100) : null);
@@ -256,8 +287,10 @@ function init(){
   document.getElementById('badges').innerHTML=`<span class="badge">데이터 기준일 ${lastDay}</span>${gapDays>0?`<span class="badge ${gapDays>2?'bad':'warn'}">${gapDays}일 미입력</span>`:'<span class="badge good">최신</span>'}<span class="badge ${DATA.offline?'warn':''}">${DATA.offline?'시트 연결 실패 · 내장 데이터 표시':(CONFIG.apiUrl?'구글 시트 연동 · '+(DATA.generated||''):'내장 데이터')}</span><span class="badge">결제 기준</span>${CONFIG.apiUrl&&!DATA.offline?'<button class="btn" id="reloadBtn">새로고침</button>':''}`;
   const rb=document.getElementById('reloadBtn'); if(rb) rb.onclick=reloadData;
   const tabs=document.getElementById('tabs');
-  tabs.innerHTML=['전체',...CH].map(c=>`<button class="tab" role="tab" data-ch="${c}" style="--tc:var(${CHV[c]||'--accent'})">${CHV[c]?`<i class="dot" style="background:var(${CHV[c]})"></i>`:''}${c}</button>`).join('');
-  tabs.onclick=(e=>{const b=e.target.closest('.tab'); if(!b) return; S.ch=b.dataset.ch; S.sub=null; render();});
+  tabs.innerHTML=['전체',...CH].map(c=>`<button class="tab" role="tab" data-ch="${c}" style="--tc:var(${CHV[c]||'--accent'})">${CHV[c]?`<i class="dot" style="background:var(${CHV[c]})"></i>`:''}${c}</button>`).join('')
+    +'<span class="tabsep" aria-hidden="true"></span>'+REPORTS.map(c=>`<button class="tab rep" role="tab" data-ch="${c}">${c==='주간 보고서'?'📅':'🗓'} ${c}</button>`).join('');
+  tabs.onclick=(e=>{const b=e.target.closest('.tab'); if(!b) return; S.ch=b.dataset.ch; S.sub=null; S.rep=null; render();});
+  document.getElementById('repSel').onchange=(e=>{S.rep=e.target.value; renderReport();});
   const st=document.getElementById('subtabs');
   st.innerHTML=`<button class="chip" data-sub="">외부몰 전체</button>`+EXT.map(c=>`<button class="chip" data-sub="${c}">${c}</button>`).join('');
   st.onclick=(e=>{const b=e.target.closest('.chip'); if(!b) return; S.sub=b.dataset.sub||null; render();});
@@ -280,6 +313,9 @@ function ensureCanvas(wrapId,canvasId){ const w=document.getElementById(wrapId);
 
 function render(){
   document.querySelectorAll('.tab').forEach(b=>b.setAttribute('aria-selected',b.dataset.ch===S.ch));
+  const isRep=REPORTS.includes(S.ch);
+  document.getElementById('reportView').hidden=!isRep; document.getElementById('mainView').style.display=isRep?'none':'grid';
+  if(isRep){ document.getElementById('subtabs').hidden=true; history.replaceState(null,'','#'+TOK[S.ch]); renderReport(); return; }
   const st=document.getElementById('subtabs'); st.hidden=S.ch!=='외부몰';
   st.querySelectorAll('.chip').forEach(b=>b.setAttribute('aria-selected',(b.dataset.sub||null)===S.sub));
   document.querySelectorAll('.preset').forEach(b=>b.setAttribute('aria-pressed',b.dataset.p===S.preset));
@@ -289,6 +325,116 @@ function render(){
   document.getElementById('secChannels').hidden=S.ch!=='전체';
   history.replaceState(null,'','#'+TOK[S.ch]);
   kpis(); if(S.ch==='전체') channels(); comment(); charts_(); table(); dtable(); quality();
+}
+
+
+/* ---------- 주간·월간 보고서 (규칙 기반 자동 코멘트) ---------- */
+const kstNow = () => new Date(Date.now()+9*3600e3); // UTC 필드로 한국시간 표현
+const ymdU = d => d.toISOString().slice(0,10);
+const DOW = '일월화수목금토';
+function weekList(){ // 매주 월요일 08:00(KST)에 직전 월~일 보고서 공개
+  const n=kstNow(); const dow=n.getUTCDay(); let mon=new Date(Date.UTC(n.getUTCFullYear(),n.getUTCMonth(),n.getUTCDate()-((dow+6)%7)));
+  if(dow===1 && n.getUTCHours()<8) mon=new Date(mon.getTime()-7*864e5);
+  const out=[]; for(let i=0;i<26;i++){ const m=new Date(mon.getTime()-i*7*864e5); const from=ymdU(new Date(m.getTime()-7*864e5)), to=ymdU(new Date(m.getTime()-864e5)); if(to<firstDay) break; out.push({key:from,from,to,pub:ymdU(m)}); }
+  return out;
+}
+function monthList(){ // 매월 1일 08:00(KST)에 직전 달 보고서 공개
+  const n=kstNow(); let y=n.getUTCFullYear(), m=n.getUTCMonth(); if(n.getUTCDate()===1 && n.getUTCHours()<8){ m-=1; }
+  const out=[]; for(let i=1;i<=24;i++){ const d=new Date(Date.UTC(y,m-i,1)); const from=ymdU(d), to=ymdU(new Date(Date.UTC(d.getUTCFullYear(),d.getUTCMonth()+1,0))); if(to<firstDay) break; out.push({key:from.slice(0,7),from,to,pub:ymdU(new Date(Date.UTC(d.getUTCFullYear(),d.getUTCMonth()+1,1)))}); }
+  return out;
+}
+function agg(from,to,f){ const rs=D.filter(r=>r.date>=from&&r.date<=to&&(!f||f(r))); const s=k=>rs.reduce((a,r)=>a+(r[k]||0),0);
+  const days=new Set(rs.map(r=>r.date)); return {net:s('net'),pay:rs.some(r=>r.pay!=null)?s('pay'):null,cancel:s('cancel')+s('refund'),orders:s('orders'),qty:s('qty'),days:days.size,n:rs.length}; }
+function monthNet(ym,ch){ const [y,m]=ym.split('-').map(Number); const r=M.find(x=>x.y===y&&x.m===m&&x.ch===ch); return r&&r.sales!=null?r.sales:null; }
+const pctTxt=(a,b)=>{const p=pct(a,b); return p==null?'비교 불가':fp(p);};
+
+function renderReport(){
+  const weekly=S.ch==='주간 보고서'; const list=weekly?weekList():monthList();
+  const sel=document.getElementById('repSel');
+  sel.innerHTML=list.map((r,i)=>`<option value="${r.key}">${weekly?`${r.from.slice(5).replace('-','/')}~${r.to.slice(5).replace('-','/')}`:`${r.key.slice(0,4)}년 ${+r.key.slice(5)}월`}${i===0?' (최신)':''}</option>`).join('');
+  const cur=list.find(r=>r.key===S.rep)||list[0]; if(!cur){ document.getElementById('repSummary').textContent='보고서를 만들 데이터가 아직 없습니다.'; return; }
+  sel.value=cur.key;
+  const len=dayList(cur.from,cur.to).length;
+  const prev=weekly?{from:addD(cur.from,-7),to:addD(cur.to,-7)}:(()=>{const d=new Date(cur.from+'T00:00:00Z'); const pf=ymdU(new Date(Date.UTC(d.getUTCFullYear(),d.getUTCMonth()-1,1))); return {from:pf,to:ymdU(new Date(Date.UTC(d.getUTCFullYear(),d.getUTCMonth(),0)))};})();
+  const ly=weekly?{from:addD(cur.from,-364),to:addD(cur.to,-364)}:{from:(+cur.from.slice(0,4)-1)+cur.from.slice(4),to:ymdU(new Date(Date.UTC(+cur.from.slice(0,4)-1,+cur.from.slice(5,7),0)))};
+  const ym=cur.from.slice(0,7), pym=prev.from.slice(0,7), lym=ly.from.slice(0,7);
+  // 채널별 값: 월간은 월별 표(전 채널), 주간은 일별 원장
+  const chVal=(ch,p,ymk)=>{ if(!weekly){ const v=monthNet(ymk,ch); if(v!=null) return v; } const a=agg(p.from,p.to,r=>grp(r.ch)===ch); return a.n?a.net:null; };
+  const rowsC=CH.map(ch=>({ch,cur:chVal(ch,cur,ym),prev:chVal(ch,prev,pym),ly:chVal(ch,ly,lym),days:agg(cur.from,cur.to,r=>grp(r.ch)===ch).days}));
+  const comp=rowsC.filter(r=>r.cur!=null); // 이번 기간에 데이터가 있는 채널끼리만 비교
+  const total=k=>comp.reduce((a,r)=>a+(r[k]||0),0);
+  const T={cur:total('cur'),prev:comp.some(r=>r.prev!=null)?total('prev'):null,ly:comp.some(r=>r.ly!=null)?total('ly'):null};
+  const compCh=new Set(comp.map(r=>r.ch)), inComp=r=>compCh.has(grp(r.ch));
+  const A=agg(cur.from,cur.to,inComp), P=agg(prev.from,prev.to,inComp);
+  const aov=A.orders?A.net/A.orders:null, paov=P.orders?P.net/P.orders:null;
+  const cr=A.pay?A.cancel/A.pay*100:null, pcr=P.pay?P.cancel/P.pay*100:null;
+  const dser=dayList(cur.from,cur.to).map(d=>({d,v:agg(d,d).net}));
+  const best=dser.slice().sort((a,b)=>b.v-a.v)[0];
+  const label=weekly?`${cur.from.slice(5).replace('-','/')}(월) ~ ${cur.to.slice(5).replace('-','/')}(일)`:`${+ym.slice(5)}월 1일 ~ ${+cur.to.slice(8)}일`;
+  // 다음 공개 시각
+  const nextPub=weekly?(()=>{const p=new Date(cur.pub+'T00:00:00Z'); return ymdU(new Date(p.getTime()+7*864e5));})():(()=>{const p=new Date(cur.pub+'T00:00:00Z'); return ymdU(new Date(Date.UTC(p.getUTCFullYear(),p.getUTCMonth()+1,1)));})();
+  document.getElementById('repEyebrow').textContent=weekly?'WEEKLY REPORT · 매주 월요일 08:00 업데이트':'MONTHLY REPORT · 매월 1일 08:00 업데이트';
+  document.getElementById('repTitle').textContent=weekly?`주간 보고서 · ${label}`:`월간 보고서 · ${ym.slice(0,4)}년 ${+ym.slice(5)}월`;
+  document.getElementById('repSub').textContent=`공개 ${cur.pub} 08:00 · 다음 보고서 ${nextPub} 08:00`;
+  // 목표
+  const tgt=!weekly?sheetTarget(ym):null;
+  const missing=rowsC.filter(r=>weekly?(r.days<len&&r.ch!=='외부몰'):r.cur==null).map(r=>r.ch);
+  const pn=pct(T.cur,T.prev), pl=pct(T.cur,T.ly);
+  document.getElementById('repSummary').innerHTML=`${weekly?'이번 주':'이번 달'} 순매출은 <b>${won(T.cur)}</b>으로 ${weekly?'전주':'전월'} 대비 <b class="${cls(pn)}">${fp(pn)}</b>, 전년 동기 대비 <b class="${cls(pl)}">${fp(pl)}</b>입니다. `
+    +`주문 ${A.orders.toLocaleString()}건 · 객단가 ${won(aov)}${paov?` (${pctTxt(aov,paov)})`:''}`+(cr!=null?` · 취소·환불 비중 ${cr.toFixed(1)}%`:'')
+    +(tgt?` · 목표 ${won(tgt)} 대비 <b>${(T.cur/tgt*100).toFixed(1)}%</b> 달성`:'')+(best&&best.v>0?` · 최고 매출일 ${best.d.slice(5).replace('-','/')}(${DOW[new Date(best.d+'T00:00:00Z').getUTCDay()]}) ${won(best.v)}`:'')+'.';
+  const kp=[[weekly?'주간 순매출':'월간 순매출',won(T.cur),`<span class="${cls(pn)}">${arrow(pn)} ${fp(pn)}</span> ${weekly?'전주':'전월'} 대비`],
+    ['전년 동기',won(T.ly),`<span class="${cls(pl)}">${arrow(pl)} ${fp(pl)}</span> 증감`],
+    ['일평균',won(T.cur/len),`${len}일 기준`],['주문 · 객단가',`${A.orders.toLocaleString()}건`,`객단가 ${won(aov)}`],
+    ['취소·환불',won(A.cancel),cr!=null?`결제 대비 ${cr.toFixed(1)}%${pcr!=null?` (직전 ${pcr.toFixed(1)}%)`:''}`:'–']];
+  if(!weekly) kp.push(['목표 달성률',tgt?(T.cur/tgt*100).toFixed(1)+'%':'목표 미설정',tgt?`목표 ${won(tgt)}`:'월목표 시트에 입력']);
+  document.getElementById('repKpis').innerHTML=kp.map(([l,v,d])=>`<div class="kpi"><div class="eyebrow">${l}</div><div class="v">${v}</div><div class="d">${d}</div></div>`).join('');
+  // 표
+  document.getElementById('repTblSub').textContent=weekly?'일별 원장 기준':'월별 집계 기준';
+  document.getElementById('repTbl').innerHTML=`<thead><tr><th>채널</th><th>${weekly?'이번 주':'이번 달'}</th><th>${weekly?'전주':'전월'}</th><th>증감</th><th>전년 동기</th><th>전년비</th><th>비중</th></tr></thead><tbody>`
+    +rowsC.map(r=>{ if(r.cur==null) return `<tr><td><i class="dot" style="background:var(${CHV[r.ch]})"></i>${r.ch}</td><td class="none">미수집</td><td class="dim">${won(r.prev)}</td><td class="dim">–</td><td class="dim">${won(r.ly)}</td><td class="dim">–</td><td class="dim">비교 제외</td></tr>`;
+      const a=pct(r.cur,r.prev), b=pct(r.cur,r.ly); return `<tr><td><i class="dot" style="background:var(${CHV[r.ch]})"></i>${r.ch}</td><td><b>${won(r.cur)}</b></td><td class="dim">${won(r.prev)}</td><td class="${cls(a)}">${fp(a)}</td><td class="dim">${won(r.ly)}</td><td class="${cls(b)}">${fp(b)}</td><td class="dim">${T.cur&&r.cur!=null?(r.cur/T.cur*100).toFixed(0)+'%':'–'}</td></tr>`;}).join('')
+    +`<tr class="sum"><td>합계${comp.length<CH.length?' <span class="dim small">(수집 채널만)</span>':''}</td><td>${won(T.cur)}</td><td>${won(T.prev)}</td><td class="${cls(pn)}">${fp(pn)}</td><td>${won(T.ly)}</td><td class="${cls(pl)}">${fp(pl)}</td><td>100%</td></tr></tbody>`;
+  // 차트: 이번 기간 vs 직전 기간
+  ensureCanvas('repChartWrap','cRep');
+  const pser=dayList(prev.from,prev.to).map(d=>agg(d,d).net);
+  mk('cRep',{type:'bar',data:{labels:dser.map(x=>weekly?`${x.d.slice(5).replace('-','/')}(${DOW[new Date(x.d+'T00:00:00Z').getUTCDay()]})`:+x.d.slice(8)+'일'),
+    datasets:[{type:'bar',label:weekly?'이번 주':'이번 달',data:dser.map(x=>Math.round(x.v/1e4)),backgroundColor:css('--accent'),maxBarThickness:26,borderRadius:3},
+      {type:'line',label:weekly?'전주':'전월',data:pser.slice(0,dser.length).map(v=>Math.round(v/1e4)),borderColor:css('--fg-3'),borderDash:[5,4],borderWidth:2,pointRadius:2,tension:.25}]},
+    options:{maintainAspectRatio:false,interaction:{mode:'index',intersect:false},plugins:{legend:{position:'top',align:'end',labels:{boxWidth:10,boxHeight:10}},tooltip:{callbacks:{label:c=>` ${c.dataset.label}: ${c.raw?.toLocaleString()}만원`}}},scales:{x:{grid:{display:false}},y:{beginAtZero:true,grid:{color:css('--grid')}}}}});
+  // 코멘트 규칙
+  const good=[], bad=[], focus=[];
+  const unit=weekly?'전주':'전월';
+  if(pn!=null&&pn>=5) good.push(`전체 순매출이 ${unit} 대비 ${fp(pn)} 성장했습니다 (${won(T.prev)} → ${won(T.cur)}).`);
+  if(pl!=null&&pl>=10) good.push(`전년 동기 대비 ${fp(pl)}로 연간 성장 흐름이 유지되고 있습니다.`);
+  if(pn!=null&&pn<=-5) bad.push(`전체 순매출이 ${unit} 대비 ${fp(pn)} 감소했습니다 (${won(T.prev)} → ${won(T.cur)}).`);
+  if(pl!=null&&pl<=-10) bad.push(`전년 동기보다 ${fp(pl)} 낮습니다. 작년 같은 시기 대비 수요·노출 변화를 점검할 필요가 있습니다.`);
+  const ups=rowsC.filter(r=>r.cur!=null&&r.prev).map(r=>({...r,p:pct(r.cur,r.prev),d:r.cur-r.prev})).sort((a,b)=>b.d-a.d);
+  ups.filter(r=>r.p>=10&&r.d>0).slice(0,2).forEach(r=>good.push(`${r.ch} ${fp(r.p)} (${won(r.prev)} → ${won(r.cur)}), 전체 증감에 ${won(r.d)} 기여.`));
+  ups.slice().reverse().filter(r=>r.p<=-10&&r.d<0).slice(0,2).forEach(r=>bad.push(`${r.ch} ${fp(r.p)} (${won(r.prev)} → ${won(r.cur)}), 전체에서 ${won(-r.d)} 감소 요인.`));
+  if(aov&&paov){ const p=pct(aov,paov); if(p>=5) good.push(`객단가가 ${won(paov)} → ${won(aov)}(${fp(p)})로 올랐습니다. 묶음·고가 상품 판매가 늘어난 신호입니다.`); if(p<=-5) bad.push(`객단가가 ${won(paov)} → ${won(aov)}(${fp(p)})로 낮아졌습니다. 할인·소용량 위주 판매 여부를 확인하세요.`); }
+  if(cr!=null){ if(cr>=10) bad.push(`취소·환불 비중이 ${cr.toFixed(1)}%(${won(A.cancel)})로 높습니다.`); else if(pcr!=null&&cr<pcr-2) good.push(`취소·환불 비중이 ${pcr.toFixed(1)}% → ${cr.toFixed(1)}%로 줄었습니다.`); }
+  if(best&&best.v>0){ const allMax=Math.max(...allDays.filter(d=>d<cur.from).map(d=>agg(d,d).net)); if(best.v>allMax) good.push(`${best.d.slice(5).replace('-','/')} 하루 순매출 ${won(best.v)}로 데이터 수집 이후 최고 기록입니다.`); }
+  if(tgt){ const r=T.cur/tgt*100; (r>=100?good:bad).push(`월 목표 ${won(tgt)} 대비 ${r.toFixed(1)}% ${r>=100?'달성':'— '+won(tgt-T.cur)+' 부족'}.`); }
+  if(missing.length) bad.push(`데이터가 비어 있는 채널: ${missing.join(', ')} — 이 채널은 비교가 정확하지 않습니다.`);
+  // 집중할 사항 (다음 기간)
+  const nextLbl=weekly?'이번 주':'이번 달';
+  const worst=ups.slice().reverse().find(r=>r.p<=-10&&r.d<0); if(worst) focus.push(`${worst.ch}: 감소 원인 점검 — 노출 순위·품절·가격 경쟁·광고 소진 순서로 확인.`);
+  const top=ups.find(r=>r.p>=10&&r.d>0); if(top) focus.push(`${top.ch}: 성장세 유지 — 잘 팔린 상품 재고 확보와 광고 예산 우선 배정.`);
+  if(!weekly){ const nym=ymdU(new Date(Date.UTC(+ym.slice(0,4),+ym.slice(5,7),1))).slice(0,7); const lyCur=monthNet(lym,'합계')||rowsC.reduce((a,r)=>a+(r.ly||0),0), lyNext=(()=>{const y=+nym.slice(0,4)-1, m=+nym.slice(5); const rs=M.filter(x=>x.y===y&&x.m===m&&(x.ch==='합계'||CH.includes(x.ch))); const s=rs.find(x=>x.ch==='합계'); return s?s.sales:rs.reduce((a,x)=>a+(x.sales||0),0);})();
+    const sp=pct(lyNext,lyCur); if(sp!=null&&Math.abs(sp)>=15) focus.push(`작년에는 ${+nym.slice(5)}월이 ${+ym.slice(5)}월보다 ${fp(sp)} ${sp>0?'늘었습니다 — 성수기 대비 재고·프로모션을 미리 준비하세요.':'줄었습니다 — 비수기 대비 프로모션·신규 유입 확보가 필요합니다.'}`);
+    const ntgt=sheetTarget(nym); if(ntgt){ const dim=new Date(Date.UTC(+nym.slice(0,4),+nym.slice(5,7),0)).getUTCDate(); focus.push(`${+nym.slice(5)}월 목표 ${won(ntgt)} — 하루 평균 ${won(ntgt/dim)} 필요 (이번 달 일평균 ${won(T.cur/len)}).`); } else focus.push(`${+nym.slice(5)}월 목표가 비어 있습니다 — 월목표 시트에 채널별 목표를 입력하면 달성률 추적이 시작됩니다.`); }
+  else { const mtdFrom=lastDay.slice(0,8)+'01'; const mt=agg(mtdFrom,lastDay).net, t2=sheetTarget(lastDay.slice(0,7)); if(t2){ const dim=new Date(Date.UTC(+lastDay.slice(0,4),+lastDay.slice(5,7),0)).getUTCDate(), rem=dim-(+lastDay.slice(8)); if(rem>0) focus.push(`월 목표까지 ${won(Math.max(0,t2-mt))} 남음 — 남은 ${rem}일 동안 하루 ${won(Math.max(0,t2-mt)/rem)} 필요.`); } }
+  if(cr!=null&&cr>=10) focus.push(`취소·환불 사유 상위 3개 확인(배송 지연·단순 변심·상품 문제) 후 상세페이지·배송 안내 보완.`);
+  const share=rowsC.filter(r=>r.cur&&T.cur).map(r=>({ch:r.ch,s:r.cur/T.cur})).sort((a,b)=>b.s-a.s)[0]; if(share&&share.s>=0.5) focus.push(`매출의 ${(share.s*100).toFixed(0)}%가 ${share.ch}에 집중 — 다른 채널 비중을 높여 의존도를 낮추는 작업 병행.`);
+  if(missing.length) focus.push(`${missing.join(', ')} 데이터 수집 연결 (정확한 비교를 위해 필요).`);
+  if(!good.length) good.push(`${unit} 대비 크게 개선된 지표가 없습니다.`);
+  if(!bad.length) bad.push(`${unit} 대비 크게 나빠진 지표가 없습니다.`);
+  if(!focus.length) focus.push(`현재 흐름 유지 — 주력 채널 재고와 광고 효율을 점검하세요.`);
+  document.getElementById('repFocusTitle').textContent=`🎯 ${nextLbl} 집중할 사항`;
+  const li=a=>a.map(x=>`<li>${x}</li>`).join('');
+  document.getElementById('repGood').innerHTML=li(good); document.getElementById('repBad').innerHTML=li(bad); document.getElementById('repFocus').innerHTML=li(focus);
+  document.getElementById('repNote').textContent=`코멘트는 원장 숫자로 자동 작성됩니다(규칙 기반). 전년 동기는 ${weekly?'364일 전 같은 요일 주간':'작년 같은 달'}과 비교합니다. 쿠팡·외부몰은 일별 수집 전이라 주간 보고서에서 비어 있을 수 있습니다.`;
 }
 
 function kpis(){
