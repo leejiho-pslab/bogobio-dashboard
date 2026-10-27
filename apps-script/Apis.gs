@@ -11,7 +11,8 @@
  */
 
 const NAVER_BASE = 'https://api.commerce.naver.com/external';
-const CAFE24_API_VERSION = '2024-06-01';
+const CAFE24_API_VERSION = ''; // 비워두면 앱 기본 버전 사용
+const CAFE24_SHOPS = [1, 2, 3, 4, 5]; // 멀티쇼핑몰: 모든 상점 합산 (보고바이오 실주문은 2번 상점)
 const CAFE24_SCOPES = ['mall.read_order']; // 카페24 앱에 등록한 권한과 같아야 함
 
 /* ============ 키 저장 ============ */
@@ -173,16 +174,18 @@ function cafe24Token_() {
 /** 갱신 토큰(2주)이 만료되지 않도록 매일 한 번 갱신 */
 function cafe24KeepAlive_() { if (prop_('CAFE24_REFRESH')) { CacheService.getScriptCache().remove('CAFE24_TOKEN'); cafe24Token_(); } }
 function cafe24Get_(path) {
-  const res = UrlFetchApp.fetch(cafe24Base_() + path, { headers: { Authorization: 'Bearer ' + cafe24Token_(), 'X-Cafe24-Api-Version': CAFE24_API_VERSION }, muteHttpExceptions: true });
+  const res = UrlFetchApp.fetch(cafe24Base_() + path, { headers: { Authorization: 'Bearer ' + cafe24Token_() }, muteHttpExceptions: true });
   if (res.getResponseCode() >= 300) throw new Error(path.split('?')[0] + ' ' + res.getResponseCode() + ' ' + res.getContentText().slice(0, 200));
   return JSON.parse(res.getContentText());
 }
 function cafe24Orders_(date, dateType) {
   const out = [];
-  for (let offset = 0; offset < 5000; offset += 500) {
-    const j = cafe24Get_(`/admin/orders?start_date=${date}&end_date=${date}&date_type=${dateType}&limit=500&offset=${offset}&embed=items`);
-    const list = j.orders || []; out.push(...list); if (list.length < 500) break;
-  }
+  CAFE24_SHOPS.forEach(shop => {
+    for (let offset = 0; offset < 5000; offset += 500) {
+      const j = cafe24Get_(`/admin/orders?shop_no=${shop}&start_date=${date}&end_date=${date}&date_type=${dateType}&limit=500&offset=${offset}&embed=items`);
+      const list = j.orders || []; out.push(...list); if (list.length < 500) break;
+    }
+  });
   return out;
 }
 function cafe24Daily_(date) {
@@ -194,7 +197,7 @@ function cafe24Daily_(date) {
     (o.items || []).forEach(it => qty += num(it.quantity)); });
   let cancel = '', cancelCnt = '', refund = '', refundCnt = '';
   try { const c = cafe24Orders_(date, 'cancel_date'); cancelCnt = c.length; cancel = c.reduce((a, o) => a + num(o.payment_amount), 0); } catch (e) { console.log('자사몰 취소 조회 실패(무시): ' + e.message); }
-  try { const r = cafe24Get_(`/admin/refunds?start_date=${date}&end_date=${date}&date_type=refund_date&limit=500`).refunds || [];
+  try { const r = [].concat(...CAFE24_SHOPS.map(s => cafe24Get_(`/admin/refunds?shop_no=${s}&start_date=${date}&end_date=${date}&date_type=refund_date&limit=500`).refunds || []));
     refundCnt = r.length; refund = r.reduce((a, x) => a + num(x.actual_refund_amount || x.refund_amount), 0); } catch (e) { console.log('자사몰 환불 조회 실패(무시): ' + e.message); }
   return { date, ch: '자사몰', pay, orders: paid.length, qty, cancel, cancelCnt, refund, refundCnt, note: '카페24API' };
 }
@@ -234,16 +237,18 @@ function cafe24Month_(start, end) {
     days[d] = { date: d, ch: '자사몰', pay: 0, orders: 0, qty: 0, cancel: 0, cancelCnt: 0, refund: 0, refundCnt: 0, note: '카페24API' };
   const day = s => s ? ymd_(new Date(s)) : null;
   const list = (dateType, extra) => { const out = [];
-    for (let off = 0; off <= 15000; off += 1000) {
-      const j = cafe24Get_(`/admin/orders?start_date=${start}&end_date=${end}&date_type=${dateType}&limit=1000&offset=${off}${extra || ''}`);
-      const l = j.orders || []; out.push(...l); if (l.length < 1000) break; }
+    CAFE24_SHOPS.forEach(shop => {
+      for (let off = 0; off <= 15000; off += 1000) {
+        const j = cafe24Get_(`/admin/orders?shop_no=${shop}&start_date=${start}&end_date=${end}&date_type=${dateType}&limit=1000&offset=${off}${extra || ''}`);
+        const l = j.orders || []; out.push(...l); if (l.length < 1000) break; }
+    });
     return out; };
   list('pay_date', '&embed=items').forEach(o => { const d = day(o.payment_date || o.order_date); if (!days[d]) return;
     days[d].pay += num(o.payment_amount != null ? o.payment_amount : (o.actual_order_amount || {}).payment_amount);
     days[d].orders++; (o.items || []).forEach(it => days[d].qty += num(it.quantity)); });
   try { list('cancel_date').forEach(o => { const d = day(o.cancel_date); if (!days[d]) return; days[d].cancel += num(o.payment_amount); days[d].cancelCnt++; }); }
   catch (e) { console.log('취소 조회 생략: ' + e.message); }
-  try { (cafe24Get_(`/admin/refunds?start_date=${start}&end_date=${end}&date_type=refund_date&limit=500`).refunds || []).forEach(r => {
+  try { [].concat(...CAFE24_SHOPS.map(s => cafe24Get_(`/admin/refunds?shop_no=${s}&start_date=${start}&end_date=${end}&date_type=refund_date&limit=500`).refunds || [])).forEach(r => {
       const d = day(r.refund_date); if (!days[d]) return; days[d].refund += num(r.actual_refund_amount || r.refund_amount); days[d].refundCnt++; }); }
   catch (e) { console.log('환불 조회 생략: ' + e.message); }
   const rows = Object.values(days).map(r => buildRow_(r, 'API'));
@@ -301,3 +306,5 @@ c)})},calculateCodePoint:function(d){return 128>d?1:2048>d?2:65536>d?3:4},calcul
 1846949527,2295493580,3734397586,2176403920,1280348187,1908823572,3871786941,846861322,1172426758,3287448474,3383383037,1655181056,3139813346,901632758,1897031941,2986607138,3066810236,3447102507,1393639104,373351379,950779232,625454576,3124240540,4148612726,2007998917,544563296,2244738638,2330496472,2058025392,1291430526,424198748,50039436,29584100,3605783033,2429876329,2791104160,1057563949,3255363231,3075367218,3463963227,1469046755,985887462],E=[1332899944,1700884034,1701343084,1684370003,1668446532,
 1869963892];k.encodeBase64=x;k.decodeBase64=B;return k});
 
+
+function _check(){ ['2026-10-01','2026-10-05','2026-10-14'].forEach(d => console.log(JSON.stringify(cafe24Daily_(d)))); }
