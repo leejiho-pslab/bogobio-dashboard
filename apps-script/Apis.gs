@@ -12,7 +12,7 @@
 
 const NAVER_BASE = 'https://api.commerce.naver.com/external';
 const CAFE24_API_VERSION = ''; // 비워두면 앱 기본 버전 사용
-const CAFE24_SHOPS = [1, 2, 3, 4, 5]; // 멀티쇼핑몰: 모든 상점 합산 (보고바이오 실주문은 2번 상점)
+const CAFE24_SHOPS = [1, 2]; // 멀티쇼핑몰 원화 상점 (1: 구 상점, 2: 현 상점). 4번은 달러 상점이라 제외
 const CAFE24_SCOPES = ['mall.read_order']; // 카페24 앱에 등록한 권한과 같아야 함
 
 /* ============ 키 저장 ============ */
@@ -174,9 +174,20 @@ function cafe24Token_() {
 /** 갱신 토큰(2주)이 만료되지 않도록 매일 한 번 갱신 */
 function cafe24KeepAlive_() { if (prop_('CAFE24_REFRESH')) { CacheService.getScriptCache().remove('CAFE24_TOKEN'); cafe24Token_(); } }
 function cafe24Get_(path) {
-  const res = UrlFetchApp.fetch(cafe24Base_() + path, { headers: { Authorization: 'Bearer ' + cafe24Token_() }, muteHttpExceptions: true });
-  if (res.getResponseCode() >= 300) throw new Error(path.split('?')[0] + ' ' + res.getResponseCode() + ' ' + res.getContentText().slice(0, 200));
-  return JSON.parse(res.getContentText());
+  let last;
+  for (let i = 0; i < 4; i++) {
+    try {
+      const res = UrlFetchApp.fetch(cafe24Base_() + path, { headers: { Authorization: 'Bearer ' + cafe24Token_() }, muteHttpExceptions: true });
+      const code = res.getResponseCode();
+      if (code === 429 || code >= 500) { last = new Error(path.split('?')[0] + ' ' + code); Utilities.sleep(1500 * (i + 1)); continue; }
+      if (code >= 300) throw new Error(path.split('?')[0] + ' ' + code + ' ' + res.getContentText().slice(0, 200));
+      return JSON.parse(res.getContentText());
+    } catch (e) {
+      if (/ 4\d\d /.test(e.message)) throw e; // 권한·요청 오류는 재시도 안 함
+      last = e; Utilities.sleep(1500 * (i + 1));
+    }
+  }
+  throw last;
 }
 
 /** 카페24 주문의 '최초 결제금액'(결제 기준). 취소돼도 결제 당시 금액 유지, 원화(KRW) 주문만 */
@@ -233,6 +244,7 @@ function cafe24Backfill() {
     const n = cafe24Month_(next, end);
     console.log(`${next} ~ ${end}: ${n}일 기록`);
     next = ymd_(addDays_(new Date(end + 'T12:00:00+09:00'), 1));
+    p.setProperty('CAFE24_BF_NEXT', next); // 월마다 진행 위치 저장
   }
   p.deleteProperty('CAFE24_BF_NEXT');
   console.log('카페24 소급 수집 완료 (2025-01-01 ~ ' + yday + ')');
