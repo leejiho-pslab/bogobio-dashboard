@@ -71,45 +71,65 @@ def to_kst_date(iso):
     return datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone(KST).strftime("%Y-%m-%d")
 
 
-def daily(date):
+def changed_ids(start, end):
+    """[start, end) 사이에 '마지막 상태 변경'이 일어난 상품주문 ID. API 한 번에 최대 24시간이라 하루씩 나눠 조회."""
+    ids, cur = set(), start
+    while cur < end:
+        frm, to = cur, min(cur + timedelta(hours=24), end)
+        f = frm.isoformat(timespec="milliseconds")
+        for _ in range(200):
+            q = urllib.parse.urlencode({"lastChangedFrom": f, "lastChangedTo": to.isoformat(timespec="milliseconds")})
+            d = (nget("/v1/pay-order/seller/product-orders/last-changed-statuses?" + q).get("data") or {})
+            ids.update(s["productOrderId"] for s in d.get("lastChangeStatuses") or [])
+            more = d.get("more") or {}
+            if not more.get("moreFrom"):
+                break
+            f = more["moreFrom"]
+        cur = to
+    return ids
+
+
+def qna(date):
     start = kst_day(date)
-    frm, to = start.isoformat(timespec="milliseconds"), (start + timedelta(days=1)).isoformat(timespec="milliseconds")
-    ids = set()
-    for _ in range(100):
-        q = urllib.parse.urlencode({"lastChangedFrom": frm, "lastChangedTo": to})
-        d = (nget("/v1/pay-order/seller/product-orders/last-changed-statuses?" + q).get("data") or {})
-        ids.update(s["productOrderId"] for s in d.get("lastChangeStatuses") or [])
-        more = d.get("more") or {}
-        if not more.get("moreFrom"):
-            break
-        frm = more["moreFrom"]
-    pay = qty = cancel = refund = 0
-    cancel_cnt = refund_cnt = 0
-    orders = set()
-    ids = list(ids)
-    for i in range(0, len(ids), 300):
-        for x in npost("/v1/pay-order/seller/product-orders/query", {"productOrderIds": ids[i:i + 300]}).get("data") or []:
-            o, po = x.get("order") or {}, x.get("productOrder") or {}
-            amt = float(po.get("totalPaymentAmount") or 0)
-            if to_kst_date(o.get("paymentDate")) == date:
-                pay += amt; qty += float(po.get("quantity") or 0); orders.add(o.get("orderId"))
-            if to_kst_date((x.get("cancel") or {}).get("cancelCompletedDate")) == date:
-                cancel += amt; cancel_cnt += 1
-            if to_kst_date((x.get("return") or {}).get("returnCompletedDate")) == date:
-                refund += amt; refund_cnt += 1
-    inq, unans = "", ""
     try:  # 상품 문의 (실패해도 매출은 기록)
         q = urllib.parse.urlencode({"fromDate": start.isoformat(timespec="milliseconds"),
                                     "toDate": (start + timedelta(days=1, milliseconds=-1)).isoformat(timespec="milliseconds"),
                                     "page": 1, "size": 100})
         j = nget("/v1/contents/qnas?" + q)
         items = j.get("contents") or j.get("content") or j.get("data") or []
-        inq = len(items); unans = sum(1 for it in items if not (it.get("answered") or it.get("answer")))
+        return len(items), sum(1 for it in items if not (it.get("answered") or it.get("answer")))
     except Exception as e:
         print("  (QnA lookup failed, ignored) " + str(e)[:150])
-    return {"date": date, "ch": "스마트스토어", "pay": round(pay), "orders": len(orders), "qty": round(qty, 1),
-            "cancel": round(cancel), "cancelCnt": cancel_cnt, "refund": round(refund), "refundCnt": refund_cnt,
-            "inq": inq, "unans": unans, "note": "네이버API(서버)"}
+        return "", ""
+
+
+def collect(days, detail=False):
+    """결제일 기준 집계. 결제 후 상태가 바뀐(배송중·구매확정 등) 주문도 빠지지 않도록
+    첫날 00시부터 '지금'까지 변경된 상품주문을 모두 모은 뒤 결제일·취소일·반품일로 나눠 담는다."""
+    start = kst_day(days[0]); now = datetime.now(KST)
+    ids = list(changed_ids(start, now))
+    B = {d: {"pay": 0.0, "qty": 0.0, "orders": set(), "cancel": 0.0, "cancelCnt": 0, "refund": 0.0, "refundCnt": 0, "lines": []} for d in days}
+    for i in range(0, len(ids), 300):
+        for x in npost("/v1/pay-order/seller/product-orders/query", {"productOrderIds": ids[i:i + 300]}).get("data") or []:
+            o, po = x.get("order") or {}, x.get("productOrder") or {}
+            amt = float(po.get("totalPaymentAmount") or 0)
+            pd = to_kst_date(o.get("paymentDate"))
+            if pd in B:
+                b = B[pd]; b["pay"] += amt; b["qty"] += float(po.get("quantity") or 0); b["orders"].add(o.get("orderId"))
+                b["lines"].append(f"    {o.get('paymentDate','')[:19]}  {po.get('productOrderId')}  {int(amt):>9,}  x{po.get('quantity')}  {po.get('productOrderStatus','')}")
+            cd = to_kst_date((x.get("cancel") or {}).get("cancelCompletedDate"))
+            if cd in B:
+                B[cd]["cancel"] += amt; B[cd]["cancelCnt"] += 1
+            rd = to_kst_date((x.get("return") or {}).get("returnCompletedDate"))
+            if rd in B:
+                B[rd]["refund"] += amt; B[rd]["refundCnt"] += 1
+    rows = []
+    for d in days:
+        b = B[d]; inq, unans = qna(d)
+        rows.append({"date": d, "ch": "스마트스토어", "pay": round(b["pay"]), "orders": len(b["orders"]), "qty": round(b["qty"], 1),
+                     "cancel": round(b["cancel"]), "cancelCnt": b["cancelCnt"], "refund": round(b["refund"]), "refundCnt": b["refundCnt"],
+                     "inq": inq, "unans": unans, "note": "네이버API(서버)", "_lines": b["lines"]})
+    return rows
 
 
 def sheet(action, **kw):
@@ -126,12 +146,16 @@ def main(argv):
     while d <= kst_day(d2):
         days.append(d.strftime("%Y-%m-%d")); d += timedelta(days=1)
     rows, errors = [], []
-    for day in days:
-        try:
-            r = daily(day); rows.append(r)
-            print(f"{day} SMARTSTORE paid {r['pay']:,} KRW | orders {r['orders']} | qty {r['qty']} | cancel {r['cancel']:,} ({r['cancelCnt']}) | return {r['refund']:,} ({r['refundCnt']}) | QnA {r['inq']}")
-        except Exception as e:
-            errors.append(f"{day}: {e}"); print("ERROR " + errors[-1])
+    try:
+        rows = collect(days)
+        for r in rows:
+            print(f"{r['date']} SMARTSTORE paid {r['pay']:,} KRW | orders {r['orders']} | qty {r['qty']} | cancel {r['cancel']:,} ({r['cancelCnt']}) | return {r['refund']:,} ({r['refundCnt']}) | QnA {r['inq']}")
+            if "--detail" in argv:
+                print("\n".join(r["_lines"]) or "    (no paid orders)")
+    except Exception as e:
+        errors.append(f"{d1}~{d2}: {e}"); print("ERROR " + errors[-1])
+    for r in rows:
+        r.pop("_lines", None)
     if test:
         print("(--test: not written to the sheet)"); return 1 if errors else 0
     if rows:
