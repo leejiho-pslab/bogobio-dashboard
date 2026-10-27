@@ -12,7 +12,7 @@
 
 const NAVER_BASE = 'https://api.commerce.naver.com/external';
 const CAFE24_API_VERSION = '2024-06-01';
-const CAFE24_SCOPES = ['mall.read_order', 'mall.read_community', 'mall.read_store'];
+const CAFE24_SCOPES = ['mall.read_order', 'mall.read_community', 'mall.read_store']; // 카페24 앱에 등록한 권한과 같아야 함
 
 /* ============ 키 저장 ============ */
 function setApiKeys(naverId, naverSecret, cafe24ClientId, cafe24Secret, cafe24MallId) {
@@ -144,7 +144,12 @@ function cafe24Connect() {
 }
 /** doGet에서 호출: 카페24가 돌려준 code를 토큰으로 교환 */
 function cafe24Callback_(p) {
-  if (p.state !== prop_('CAFE24_STATE')) return 'state 불일치 — cafe24Connect를 다시 실행하세요.';
+  if (p.error || !p.code) {
+    console.log('카페24 연결 오류: ' + JSON.stringify(p));
+    return '카페24 연결 실패<br><b>' + (p.error || '코드 없음') + '</b><br>' + (p.error_description || JSON.stringify(p)) +
+      '<br><br>이 화면을 캡처해서 Claude에게 보내주세요.';
+  }
+  if (p.state && p.state !== prop_('CAFE24_STATE')) return 'state 불일치 — cafe24Connect를 다시 실행하세요.';
   const j = cafe24TokenReq_({ grant_type: 'authorization_code', code: p.code, redirect_uri: webAppUrl_() });
   return j.access_token ? '카페24 연결 완료. 이 창을 닫아도 됩니다.' : '카페24 연결 실패: ' + JSON.stringify(j).slice(0, 300);
 }
