@@ -32,9 +32,21 @@ const FORM_FIELDS = [ // [제목, 도움말, 필수]
   ['비고', '특이사항(프로모션, 품절, 시스템 오류 등)', false],
 ];
 
+
+/** 시트 열기: 시트에 연결된 스크립트면 그 시트, 아니면 저장된 ID, 그것도 없으면 새로 만듦 */
+function getSS_() {
+  let ss = null; try { ss = SpreadsheetApp.getActiveSpreadsheet(); } catch (e) {}
+  if (ss) return ss;
+  const p = PropertiesService.getScriptProperties(); const id = p.getProperty('SS_ID');
+  if (id) return SpreadsheetApp.openById(id);
+  ss = SpreadsheetApp.create('보고바이오_채널현황_원장'); p.setProperty('SS_ID', ss.getId());
+  console.log('새 구글 시트를 만들었습니다: ' + ss.getUrl());
+  return ss;
+}
+
 /* ============ 1. 최초 설정 ============ */
 function setup() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet(); const t0 = Date.now(); const log = m => console.log(`[${((Date.now() - t0) / 1000).toFixed(1)}s] ${m}`);
+  const ss = getSS_(); const t0 = Date.now(); const log = m => console.log(`[${((Date.now() - t0) / 1000).toFixed(1)}s] ${m}`);
   log('1/6 시트 생성'); ensureSheet_(ss, '원장', LEDGER_HEAD);
   const cm = ensureSheet_(ss, '채널마스터', ['채널코드', '채널명', '그룹']);
   if (cm.getLastRow() < 2) cm.getRange(2, 1, CHANNELS.length, 3).setValues(CHANNELS);
@@ -52,7 +64,7 @@ function setup() {
   log('2/6 과거 데이터 적재'); loadHistory_(ss);
   log('3/6 구글폼 생성'); createForm_(ss);
   log('4/6 트리거 등록'); installTriggers_();
-  log('5/6 완료. 폼 주소: ' + getSetting_('FORM_URL'));
+  log('5/6 완료. 폼 주소: ' + getSetting_('FORM_URL')); log('6/6 원장 시트 주소: ' + ss.getUrl());
   try { SpreadsheetApp.getUi().alert('설정 완료.\n1) setSecrets(비밀번호, 봇토큰, 채팅ID) 실행\n2) 배포 → 웹 앱 → URL을 대시보드에 입력\n폼 주소는 "설정" 시트 FORM_URL 참조'); } catch (e) {}
 }
 
@@ -84,7 +96,7 @@ function createForm_(ss) {
 
 function installTriggers_() {
   ScriptApp.getProjectTriggers().forEach(t => ScriptApp.deleteTrigger(t));
-  ScriptApp.newTrigger('onFormSubmit_').forSpreadsheet(SpreadsheetApp.getActiveSpreadsheet()).onFormSubmit().create();
+  ScriptApp.newTrigger('onFormSubmit_').forSpreadsheet(getSS_()).onFormSubmit().create();
   ScriptApp.newTrigger('armDailyPush_').timeBased().everyDays(1).atHour(6).create(); // 06~07시에 08:00 정시 트리거를 건다
 }
 
@@ -108,7 +120,7 @@ function buildRow_(o, method) {
 
 /** 같은 날짜+채널이 있으면 덮어쓰고(정정), 없으면 추가 */
 function upsertLedger_(rows) {
-  const sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('원장');
+  const sh = getSS_().getSheetByName('원장');
   const last = sh.getLastRow();
   const keys = last > 1 ? sh.getRange(2, 1, last - 1, 2).getValues().map(r => normDate_(r[0]) + '|' + r[1]) : [];
   const out = { updated: 0, added: 0 }; const toAdd = [];
@@ -151,7 +163,7 @@ function handle_(p) {
 
 /** 대시보드가 쓰는 데이터 묶음 */
 function buildData_() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ss = getSS_();
   const led = readLedger_();
   const daily = led.map(r => ({ date: r.date, ch: r.ch, pay: nz_(r.pay), orders: nz_(r.orders), qty: nz_(r.qty), cancel: nz_(r.cancel), cancelCnt: nz_(r.cancelCnt), refund: nz_(r.refund), refundCnt: nz_(r.refundCnt), net: nz_(r.net), visitors: nz_(r.visitors), inq: nz_(r.inq), unans: nz_(r.unans), reviews: nz_(r.reviews), note: r.note, method: r.method }));
   // 월별: 원장에 해당 월 데이터가 있으면 원장 집계, 없으면 과거 월별 표
@@ -266,15 +278,15 @@ function missingChannels_(dateStr) {
 function monthTotal_(ym, group) {
   const led = readLedger_().filter(r => r.date.slice(0, 7) === ym && (!group || GROUP_OF[r.ch] === group));
   if (led.length) return led.reduce((a, r) => a + (nz_(r.net) || 0), 0);
-  const hist = sheetObjects_(SpreadsheetApp.getActiveSpreadsheet().getSheetByName('월별실적_과거')).filter(h => `${h.연}-${pad_(h.월)}` === ym);
+  const hist = sheetObjects_(getSS_().getSheetByName('월별실적_과거')).filter(h => `${h.연}-${pad_(h.월)}` === ym);
   if (!hist.length) return null;
   const rows = group ? hist.filter(h => h.채널명 === group) : hist.filter(h => CH_GROUPS.includes(h.채널명) || (h.채널명 === '합계'));
   if (!group && rows.some(h => h.채널명 === '합계')) return num_(rows.find(h => h.채널명 === '합계').매출);
   return rows.reduce((a, h) => a + (num_(h.매출) || 0), 0) || null;
 }
-function targetFor_(ym) { const t = sheetObjects_(SpreadsheetApp.getActiveSpreadsheet().getSheetByName('월목표')).find(x => x.연월 === ym); return t && num_(t.합계) ? num_(t.합계) : null; }
+function targetFor_(ym) { const t = sheetObjects_(getSS_().getSheetByName('월목표')).find(x => x.연월 === ym); return t && num_(t.합계) ? num_(t.합계) : null; }
 function readLedger_() {
-  const sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('원장'); if (sh.getLastRow() < 2) return [];
+  const sh = getSS_().getSheetByName('원장'); if (sh.getLastRow() < 2) return [];
   const keys = ['date', 'ch', 'pay', 'orders', 'qty', 'cancel', 'cancelCnt', 'refund', 'refundCnt', 'net', 'visitors', 'inq', 'unans', 'reviews', 'note', 'method', 'at'];
   return sh.getRange(2, 1, sh.getLastRow() - 1, LEDGER_HEAD.length).getValues().filter(r => r[0] && r[1]).map(r => { const o = {}; keys.forEach((k, i) => o[k] = r[i]); o.date = normDate_(o.date); return o; });
 }
@@ -291,8 +303,8 @@ function ensureSheet_(ss, name, head) {
   return sh;
 }
 function sheetObjects_(sh) { if (!sh || sh.getLastRow() < 2) return []; const v = sh.getDataRange().getValues(); const head = v[0]; return v.slice(1).map(r => { const o = {}; head.forEach((h, i) => o[h] = r[i]); return o; }); }
-function getSetting_(k) { const r = sheetObjects_(SpreadsheetApp.getActiveSpreadsheet().getSheetByName('설정')).find(x => x.키 === k); return r ? r.값 : null; }
-function setSetting_(k, v, desc) { const sh = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('설정'); const vals = sh.getDataRange().getValues(); const i = vals.findIndex(r => r[0] === k); if (i > 0) sh.getRange(i + 1, 2).setValue(v); else sh.appendRow([k, v, desc || '']); }
+function getSetting_(k) { const r = sheetObjects_(getSS_().getSheetByName('설정')).find(x => x.키 === k); return r ? r.값 : null; }
+function setSetting_(k, v, desc) { const sh = getSS_().getSheetByName('설정'); const vals = sh.getDataRange().getValues(); const i = vals.findIndex(r => r[0] === k); if (i > 0) sh.getRange(i + 1, 2).setValue(v); else sh.appendRow([k, v, desc || '']); }
 function normDate_(v) { if (v instanceof Date) return Utilities.formatDate(v, TZ, 'yyyy-MM-dd'); const s = String(v || '').trim(); const m = s.match(/(\d{4})[.\-\/년 ]+(\d{1,2})[.\-\/월 ]+(\d{1,2})/); return m ? `${m[1]}-${pad_(m[2])}-${pad_(m[3])}` : ''; }
 function ymd_(d) { return Utilities.formatDate(d, TZ, 'yyyy-MM-dd'); }
 function addDays_(d, n) { const x = new Date(d); x.setDate(x.getDate() + n); return x; }
