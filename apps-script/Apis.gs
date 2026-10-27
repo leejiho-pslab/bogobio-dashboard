@@ -12,7 +12,7 @@
 
 const NAVER_BASE = 'https://api.commerce.naver.com/external';
 const CAFE24_API_VERSION = '2024-06-01';
-const CAFE24_SCOPES = ['mall.read_order', 'mall.read_community', 'mall.read_store']; // 카페24 앱에 등록한 권한과 같아야 함
+const CAFE24_SCOPES = ['mall.read_order']; // 카페24 앱에 등록한 권한과 같아야 함
 
 /* ============ 키 저장 ============ */
 function setApiKeys(naverId, naverSecret, cafe24ClientId, cafe24Secret, cafe24MallId) {
@@ -197,6 +197,58 @@ function cafe24Daily_(date) {
   try { const r = cafe24Get_(`/admin/refunds?start_date=${date}&end_date=${date}&date_type=refund_date&limit=500`).refunds || [];
     refundCnt = r.length; refund = r.reduce((a, x) => a + num(x.actual_refund_amount || x.refund_amount), 0); } catch (e) { console.log('자사몰 환불 조회 실패(무시): ' + e.message); }
   return { date, ch: '자사몰', pay, orders: paid.length, qty, cancel, cancelCnt, refund, refundCnt, note: '카페24API' };
+}
+
+
+/* ============ 카페24 소급 수집 (여러 번 나눠 자동으로 이어서 실행) ============ */
+/** 실행: cafe24Backfill — 2025-01-01부터 어제까지 월 단위로 수집. 6분 제한에 걸리면 1분 뒤 자동으로 이어서 실행 */
+function cafe24Backfill() {
+  const p = PropertiesService.getScriptProperties(); const t0 = Date.now();
+  let next = p.getProperty('CAFE24_BF_NEXT') || '2025-01-01';
+  const yday = ymd_(addDays_(new Date(), -1));
+  ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction() === 'cafe24Backfill').forEach(t => ScriptApp.deleteTrigger(t));
+  while (next <= yday) {
+    if (Date.now() - t0 > 4.5 * 60 * 1000) { // 시간 초과 전에 다음 실행 예약
+      p.setProperty('CAFE24_BF_NEXT', next);
+      ScriptApp.newTrigger('cafe24Backfill').timeBased().after(60 * 1000).create();
+      console.log('일부 완료. 1분 뒤 ' + next + '부터 자동으로 이어서 실행합니다.');
+      return;
+    }
+    const y = +next.slice(0, 4), m = +next.slice(5, 7);
+    const end = ymd_(new Date(y, m, 0)) < yday ? ymd_(new Date(y, m, 0)) : yday;
+    const n = cafe24Month_(next, end);
+    console.log(`${next} ~ ${end}: ${n}일 기록`);
+    next = ymd_(addDays_(new Date(end + 'T12:00:00+09:00'), 1));
+  }
+  p.deleteProperty('CAFE24_BF_NEXT');
+  console.log('카페24 소급 수집 완료 (2025-01-01 ~ ' + yday + ')');
+  try { tg_('✅ 자사몰(카페24) 소급 수집 완료: 2025-01-01 ~ ' + yday); } catch (e) {}
+}
+/** 처음부터 다시 하고 싶을 때 */
+function cafe24BackfillReset() { PropertiesService.getScriptProperties().deleteProperty('CAFE24_BF_NEXT'); console.log('초기화됨'); }
+
+function cafe24Month_(start, end) {
+  cafe24Token_();
+  const num = v => Number(String(v == null ? 0 : v).replace(/[^0-9.\-]/g, '')) || 0;
+  const days = {}; for (let d = start; d <= end; d = ymd_(addDays_(new Date(d + 'T12:00:00+09:00'), 1)))
+    days[d] = { date: d, ch: '자사몰', pay: 0, orders: 0, qty: 0, cancel: 0, cancelCnt: 0, refund: 0, refundCnt: 0, note: '카페24API' };
+  const day = s => s ? ymd_(new Date(s)) : null;
+  const list = (dateType, extra) => { const out = [];
+    for (let off = 0; off <= 15000; off += 1000) {
+      const j = cafe24Get_(`/admin/orders?start_date=${start}&end_date=${end}&date_type=${dateType}&limit=1000&offset=${off}${extra || ''}`);
+      const l = j.orders || []; out.push(...l); if (l.length < 1000) break; }
+    return out; };
+  list('pay_date', '&embed=items').forEach(o => { const d = day(o.payment_date || o.order_date); if (!days[d]) return;
+    days[d].pay += num(o.payment_amount != null ? o.payment_amount : (o.actual_order_amount || {}).payment_amount);
+    days[d].orders++; (o.items || []).forEach(it => days[d].qty += num(it.quantity)); });
+  try { list('cancel_date').forEach(o => { const d = day(o.cancel_date); if (!days[d]) return; days[d].cancel += num(o.payment_amount); days[d].cancelCnt++; }); }
+  catch (e) { console.log('취소 조회 생략: ' + e.message); }
+  try { (cafe24Get_(`/admin/refunds?start_date=${start}&end_date=${end}&date_type=refund_date&limit=500`).refunds || []).forEach(r => {
+      const d = day(r.refund_date); if (!days[d]) return; days[d].refund += num(r.actual_refund_amount || r.refund_amount); days[d].refundCnt++; }); }
+  catch (e) { console.log('환불 조회 생략: ' + e.message); }
+  const rows = Object.values(days).map(r => buildRow_(r, 'API'));
+  mergeLedger_(rows);
+  return rows.length;
 }
 
 /* ============ bcrypt (네이버 서명용, bcryptjs 2.4.3 · Apache-2.0) ============ */
