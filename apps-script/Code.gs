@@ -165,6 +165,8 @@ function handle_(p) {
         return out(Object.assign({ ok: true }, replaceProducts_(p.ch, normDate_(p.d1), normDate_(p.d2), p.rows || [], p.method || 'API')));
       }
       case 'coupang': return out(Object.assign({ ok: true }, coupangIngest_(p.raw || {}))); // 서버가 보낸 쿠팡 원본 → 저장·집계
+      case 'master': return out({ ok: true, rows: sheetObjects_(getSS_().getSheetByName('제품마스터')) }); // 제품마스터 전체
+      case 'masterSet': return out(Object.assign({ ok: true }, setMaster_(p.rows || []))); // rows:[{ch, code, std}] → 표준제품명 갱신
       case 'alert': { return out({ ok: true, sent: tg_(String(p.text || '').slice(0, 3500)) });
       }
       case 'push': return out({ ok: true, sent: sendDaily_(p.date) });
@@ -255,6 +257,15 @@ function updateProductMaster_(ss, ch, add) {
   const rows = add.filter(r => { const k = ch + '|' + r[2]; if (have.has(k) || seen.has(k)) return false; seen.add(k); return true; }).map(r => [ch, r[2], r[3], normProd_(r[3]), today]);
   if (rows.length) sh.getRange(sh.getLastRow() + 1, 1, rows.length, PMASTER_HEAD.length).setValues(rows);
   return rows.length;
+}
+/** 제품마스터 표준제품명 일괄 갱신: rows [{ch, code, std}] (채널+상품코드가 같은 행의 D열만 바꿈) */
+function setMaster_(rows) {
+  const sh = getSS_().getSheetByName('제품마스터'); if (!sh || sh.getLastRow() < 2) return { updated: 0 };
+  const v = sh.getRange(2, 1, sh.getLastRow() - 1, PMASTER_HEAD.length).getValues();
+  const want = {}; rows.forEach(r => { if (r && r.ch && r.code != null && r.std) want[r.ch + '|' + String(r.code).trim()] = String(r.std).trim(); });
+  let updated = 0; const col = v.map(r => { const k = r[0] + '|' + String(r[1]).trim(); if (want[k] && want[k] !== r[3]) { updated++; return [want[k]]; } return [r[3]]; });
+  if (updated) { sh.getRange(2, 4, col.length, 1).setValues(col); SpreadsheetApp.flush(); }
+  return { updated, total: v.length };
 }
 /** 대시보드용: 월별 + 일별(전체 기간), 표준제품명 기준. 배열로 압축 */
 function buildProducts_(asof) {
