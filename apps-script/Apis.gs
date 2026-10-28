@@ -315,6 +315,65 @@ function _probe(date) { date = date || ymd_(addDays_(new Date(), -1));
   ['pay_date', 'cancel_date', 'exchange_complete_date'].forEach(dt => { try { const j = cafe24Get_(`/admin/orders?shop_no=2&start_date=${date.slice(0, 8)}01&end_date=${date}&date_type=${dt}&limit=1&embed=items`); const o = (j.orders || [])[0];
     console.log(dt + ': ' + (o ? JSON.stringify(Object.assign({}, o.items && o.items[0], { _order_keys: Object.keys(o).join(',') })).slice(0, 3000) : '없음')); } catch (e) { console.log(dt + ' 오류 ' + e.message); } }); }
 
+
+/* ============ 쿠팡 OPEN API (키는 프로젝트 설정 > 스크립트 속성: CP_VENDOR, CP_ACCESS, CP_SECRET) ============ */
+const CP_BASE = 'https://api-gateway.coupang.com';
+function cpSign_(method, path, query) {
+  const dt = Utilities.formatDate(new Date(), 'UTC', "yyMMdd'T'HHmmss'Z'");
+  const sig = Utilities.computeHmacSha256Signature(dt + method + path + (query || ''), prop_('CP_SECRET')).map(b => ('0' + (b & 255).toString(16)).slice(-2)).join('');
+  return `CEA algorithm=HmacSHA256, access-key=${prop_('CP_ACCESS')}, signed-date=${dt}, signature=${sig}`;
+}
+function cpGet_(path, params) {
+  const q = Object.keys(params || {}).filter(k => params[k] !== '' && params[k] != null).map(k => k + '=' + encodeURIComponent(params[k])).join('&');
+  let last;
+  for (let i = 0; i < 5; i++) {
+    const res = UrlFetchApp.fetch(CP_BASE + path + (q ? '?' + q : ''), { headers: { Authorization: cpSign_('GET', path, q), 'X-Requested-By': prop_('CP_VENDOR') }, muteHttpExceptions: true });
+    const c = res.getResponseCode();
+    if (c === 429 || c >= 500) { last = new Error(path.split('/').slice(-2).join('/') + ' ' + c); Utilities.sleep(1500 * (i + 1)); continue; }
+    if (c >= 300) throw new Error(path.split('/').slice(-2).join('/') + ' ' + c + ' ' + res.getContentText().slice(0, 300));
+    return JSON.parse(res.getContentText());
+  }
+  throw last;
+}
+const CP_V = () => '/v2/providers/openapi/apis/api/v4/vendors/' + prop_('CP_VENDOR');
+const CP_STATUSES = ['ACCEPT', 'INSTRUCT', 'DEPARTURE', 'DELIVERING', 'FINAL_DELIVERY', 'NONE_TRACKING'];
+/** 발주서(주문) 목록: 날짜 범위(최대 31일) × 상태별, 다음 페이지 토큰으로 끝까지 */
+function cpOrderSheets_(from, to) {
+  const out = {};
+  CP_STATUSES.forEach(st => { let token = '';
+    for (let g = 0; g < 200; g++) {
+      const j = cpGet_(CP_V() + '/ordersheets', { createdAtFrom: from, createdAtTo: to, status: st, maxPerPage: 50, nextToken: token });
+      (j.data || []).forEach(o => { out[o.shipmentBoxId || (o.orderId + '_' + st)] = Object.assign({ _st: st }, o); });
+      token = j.nextToken || ''; if (!token) break;
+    } });
+  return Object.values(out);
+}
+/** 취소·반품 요청 목록 */
+function cpReturns_(from, to, cancelType, status) {
+  const out = []; let token = '';
+  for (let g = 0; g < 200; g++) {
+    const j = cpGet_(CP_V() + '/returnRequests', { createdAtFrom: from, createdAtTo: to, cancelType, status: status || '', maxPerPage: 50, nextToken: token });
+    out.push(...(j.data || [])); token = j.nextToken || ''; if (!token) break;
+  }
+  return out;
+}
+
+/** 연결 확인·응답 형식 확인용: 로그 한 줄로 */
+function coupangTest() {
+  const L = []; const cut = (o, n) => JSON.stringify(o).slice(0, n || 1500);
+  if (!prop_('CP_VENDOR') || !prop_('CP_ACCESS') || !prop_('CP_SECRET')) { console.log('쿠팡 키 미설정: 프로젝트 설정 > 스크립트 속성에 CP_VENDOR, CP_ACCESS, CP_SECRET'); return; }
+  try {
+    const d = '2026-10-01'; const sheets = cpOrderSheets_(d, d);
+    const sum = {}; sheets.forEach(o => (o.orderItems || []).forEach(it => ['orderPrice', 'salesPrice', 'discountPrice', 'instantCouponDiscount', 'downloadableCouponDiscount', 'coupangDiscount', 'shippingCount'].forEach(k => sum[k] = (sum[k] || 0) + Number(it[k] || 0))));
+    L.push('ORDERS ' + d + ' sheets=' + sheets.length + ' orders=' + new Set(sheets.map(o => o.orderId)).size + ' st=' + cut(sheets.reduce((m, o) => (m[o._st] = (m[o._st] || 0) + 1, m), {})) + ' sum=' + cut(sum));
+    if (sheets[0]) L.push('SAMPLE ' + cut(Object.assign({}, sheets[0], { receiver: null, orderer: null, overseaShippingInfoDto: null }), 2500));
+  } catch (e) { L.push('ORDERS ERR ' + e.message); }
+  [['CANCEL', ''], ['RETURN', 'UC'], ['RETURN', 'CC']].forEach(([t, st]) => {
+    try { const r = cpReturns_('2026-10-01', '2026-10-27', t, st); L.push(t + st + ' n=' + r.length + (r[0] ? ' SAMPLE ' + cut(r[0], 1800) : '')); }
+    catch (e) { L.push(t + st + ' ERR ' + e.message); } });
+  console.log(L.join('\n#### '));
+}
+
 /* ============ bcrypt (네이버 서명용, bcryptjs 2.4.3 · Apache-2.0) ============ */
 /*
  bcrypt.js (c) 2013 Daniel Wirtz <dcode@dcode.io>
