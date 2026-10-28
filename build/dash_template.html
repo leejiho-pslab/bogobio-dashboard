@@ -446,7 +446,7 @@ function prodRowsHtml(rowsT,st,sel,toYm,selP){
 }
 const PROD_HEAD_HTML='<thead><tr><th>#</th><th style="text-align:left">제품</th><th>판매수량</th><th>판매금액</th><th>순매출</th><th>비중</th><th>직전 대비</th><th>취소</th><th>반품</th><th>교환</th><th>반품률</th><th>흐름(12개월)</th></tr></thead>';
 const gapRowsHtml=st=>(st.gaps||[]).map(g=>`<tr class="gap"><td></td><td class="name" style="text-align:left" title="${g.full?'이 채널은 아직 제품별 데이터가 수집되지 않았습니다':'제품별 합계와 채널 매출의 차이(배송비·미분류 등)'}">${esc(g.p)}</td><td class="dim">–</td><td>${won(g.amt)}</td><td>${won(g.net)}</td><td>${g.share.toFixed(1)}%</td><td colspan="6" class="dim" style="text-align:left">${g.full?'제품별 수집 전 — 채널 매출만 반영':'제품 합계와 채널 매출 차이'}</td></tr>`).join('');
-const prodSumHtml=st=>{const T=st.T, pa=pct(T.amt,st.PT.amt); return gapRowsHtml(st)+`<tr class="sum"><td></td><td style="text-align:left">합계 <span class="small muted">(= 채널 매출)</span></td><td>${Math.round(T.qty).toLocaleString()}</td><td>${won(T.amt)}</td><td>${won(T.net)}</td><td>100%</td><td class="${cls(st.hasPrev?pa:null)}">${st.hasPrev?fp(pa):'–'}</td><td>${Math.round(T.cq)}</td><td>${Math.round(T.rq)}</td><td>${Math.round(T.xq)}</td><td>${T.qty?(T.rq/T.qty*100).toFixed(1)+'%':'–'}</td><td></td></tr>`;};
+const prodSumHtml=st=>{const T=st.T, pa=(st.gaps||[]).length?null:pct(T.amt,st.PT.amt); return gapRowsHtml(st)+`<tr class="sum"><td></td><td style="text-align:left">합계 <span class="small muted">(= 채널 매출)</span></td><td>${Math.round(T.qty).toLocaleString()}</td><td>${won(T.amt)}</td><td>${won(T.net)}</td><td>100%</td><td class="${cls(st.hasPrev?pa:null)}">${st.hasPrev&&pa!=null?fp(pa):'–'}</td><td>${Math.round(T.cq)}</td><td>${Math.round(T.rq)}</td><td>${Math.round(T.xq)}</td><td>${T.qty?(T.rq/T.qty*100).toFixed(1)+'%':'–'}</td><td></td></tr>`;};
 
 /* 채널 화면(전체 포함) 안의 제품 판매 현황 — 상단 기간·채널 선택을 그대로 따름 */
 function mainProducts(){
@@ -491,7 +491,7 @@ function renderProducts(){
   const fEl=document.getElementById('pvFrom'), tEl=document.getElementById('pvTo'); fEl.value=PV.from; tEl.value=PV.to; fEl.min=tEl.min=PFIRST; fEl.max=tEl.max=lastDay;
   const st=prodStats(PV.from,PV.to,PV.ch); const {list,T,PT,hasPrev,n}=st; const toYm=PV.to.slice(0,7);
   document.getElementById('pvHint').textContent=`${n}일 · `+(hasPrev?`비교: 직전 ${n}일 (${st.pFrom} ~ ${st.pTo})`:'직전 기간 데이터 없음 — 증감 비교 생략')+` · 기간 버튼은 마지막 입력일(${lastDay}) 기준 · 제품 데이터 보유 구간 ${PFIRST} ~ ${PLAST} · 수집 채널: ${[...new Set(PD.map(r=>r.ch))].join(', ')}`;
-  const top=list.slice().sort((a,b)=>b.amt-a.amt)[0]; const pq=pct(T.qty,PT.qty), pa=pct(T.amt,PT.amt);
+  const top=list.slice().sort((a,b)=>b.amt-a.amt)[0]; const pq=pct(T.qty,PT.qty), pa=st.gaps.length?null:pct(T.amt,PT.amt);
   const kp=[['판매 제품 수',`${list.filter(a=>a.qty>0).length}개`,hasPrev?`직전 ${Object.values(st.prev).filter(a=>a.qty>0).length}개`:'비교 기간 없음'],
     ['판매수량',`${Math.round(T.qty).toLocaleString()}개`,hasPrev?`<span class="${cls(pq)}">${arrow(pq)} ${fp(pq)}</span> 직전 대비`:'–'],
     ['판매금액',won(T.amt),hasPrev?`<span class="${cls(pa)}">${arrow(pa)} ${fp(pa)}</span> 직전 대비`:'–'],
