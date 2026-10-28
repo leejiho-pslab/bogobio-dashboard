@@ -253,17 +253,16 @@ function updateProductMaster_(ss, ch, add) {
   if (rows.length) sh.getRange(sh.getLastRow() + 1, 1, rows.length, PMASTER_HEAD.length).setValues(rows);
   return rows.length;
 }
-/** 대시보드용: 월별(전체 기간) + 일별(최근 120일), 표준제품명 기준. 배열로 압축 */
+/** 대시보드용: 월별 + 일별(전체 기간), 표준제품명 기준. 배열로 압축 */
 function buildProducts_(asof) {
   const ss = getSS_(); const sh = ss.getSheetByName('제품원장'); if (!sh || sh.getLastRow() < 2) return { cols: [], m: [], d: [] };
   const std = {}; sheetObjects_(ss.getSheetByName('제품마스터')).forEach(m => { std[m.채널 + '|' + m.상품코드] = String(m.표준제품명 || m['상품명(채널 원본)'] || m.상품코드).trim(); });
   const v = sh.getRange(2, 1, sh.getLastRow() - 1, 11).getValues();
-  const cut = asof ? ymd_(addDays_(new Date(asof + 'T12:00:00+09:00'), -119)) : '0000';
   const M = {}, Dd = {};
   const addTo = (map, k, head, r) => { const a = map[k] || (map[k] = head.concat([0, 0, 0, 0, 0, 0, 0])); for (let i = 0; i < 7; i++) a[head.length + i] += Number(r[4 + i]) || 0; };
   v.forEach(r => { if (!r[0]) return; const d = normDate_(r[0]); const ch = r[1]; const name = std[ch + '|' + r[2]] || normProd_(r[3]);
     addTo(M, d.slice(0, 7) + '|' + ch + '|' + name, [d.slice(0, 7), ch, name], r);
-    if (d >= cut) addTo(Dd, d + '|' + ch + '|' + name, [d, ch, name], r); });
+    addTo(Dd, d + '|' + ch + '|' + name, [d, ch, name], r); });
   const round = a => a.map((x, i) => i < 3 ? x : Math.round(x * 10) / 10);
   return { cols: ['기간', '채널', '제품', '판매수량', '판매금액', '취소수량', '취소금액', '반품수량', '반품금액', '교환수량'], m: Object.values(M).map(round), d: Object.values(Dd).map(round) };
 }
