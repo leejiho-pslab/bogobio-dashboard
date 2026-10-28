@@ -164,6 +164,7 @@ function handle_(p) {
       case 'products': { // {ch, d1, d2, rows:[{date, code, name, qty, amt, cancelQty, cancelAmt, retQty, retAmt, exQty}]} → 그 채널·기간 제품 행을 통째로 교체
         return out(Object.assign({ ok: true }, replaceProducts_(p.ch, normDate_(p.d1), normDate_(p.d2), p.rows || [], p.method || 'API')));
       }
+      case 'coupang': return out(Object.assign({ ok: true }, coupangIngest_(p.raw || {}))); // 서버가 보낸 쿠팡 원본 → 저장·집계
       case 'alert': { return out({ ok: true, sent: tg_(String(p.text || '').slice(0, 3500)) });
       }
       case 'push': return out({ ok: true, sent: sendDaily_(p.date) });

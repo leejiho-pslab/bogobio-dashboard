@@ -374,6 +374,80 @@ function coupangTest() {
   console.log(L.join('\n#### '));
 }
 
+/* ============ 쿠팡: 서버(고정 IP)가 보낸 원본 → 원본 저장 + 원장·제품원장 기록 ============ */
+const CP_RAW_HEAD = ['시작', '끝', '수신시각', '조각', '원본(JSON)'];
+function coupangIngest_(raw) {
+  if (!raw.d1 || !raw.d2) throw new Error('coupang: d1, d2 필요');
+  cpStoreRaw_(raw);
+  return cpParse_(raw, true);
+}
+/** 원본은 '쿠팡원본' 탭에 보관 (계산 방식을 고치면 서버 재수집 없이 cpReparse로 다시 집계) */
+function cpStoreRaw_(raw) {
+  const lock = LockService.getScriptLock(); lock.waitLock(120000);
+  try {
+    const sh = ensureSheet_(getSS_(), '쿠팡원본', CP_RAW_HEAD); sh.getRange('A:B').setNumberFormat('@');
+    const last = sh.getLastRow(); const v = last > 1 ? sh.getRange(2, 1, last - 1, 5).getValues() : [];
+    const keep = v.filter(r => !(normDate_(r[0]) === raw.d1 && normDate_(r[1]) === raw.d2)).map(r => [normDate_(r[0]), normDate_(r[1]), r[2], r[3], r[4]]);
+    const txt = JSON.stringify(raw); const now = Utilities.formatDate(new Date(), TZ, 'yyyy-MM-dd HH:mm'); const add = [];
+    for (let i = 0, k = 1; i < txt.length; i += 45000, k++) add.push([raw.d1, raw.d2, now, k, txt.slice(i, i + 45000)]);
+    const all = keep.concat(add).sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[3] - b[3]);
+    if (last > 1) sh.getRange(2, 1, last - 1, 5).clearContent();
+    if (all.length) sh.getRange(2, 1, all.length, 5).setValues(all);
+  } finally { lock.releaseLock(); }
+}
+function cpLoadRaw_(from, to) {
+  const sh = getSS_().getSheetByName('쿠팡원본'); if (!sh || sh.getLastRow() < 2) return [];
+  const g = {}; sh.getRange(2, 1, sh.getLastRow() - 1, 5).getValues().forEach(r => { const d1 = normDate_(r[0]), d2 = normDate_(r[1]);
+    if (d2 < from || d1 > to) return; const k = d1 + '|' + d2; (g[k] = g[k] || []).push([r[3], r[4]]); });
+  return Object.values(g).map(parts => JSON.parse(parts.sort((a, b) => a[0] - b[0]).map(x => x[1]).join('')));
+}
+/** 편집기에서 실행: 보관된 원본으로 다시 집계 (예: cpReparse('2025-01-01','2026-10-27')) */
+function cpReparse(from, to) { from = from || '2025-01-01'; to = to || ymd_(addDays_(new Date(), -1));
+  const raws = cpLoadRaw_(from, to); raws.forEach(r => cpParse_(r, true)); console.log('다시 집계: ' + raws.length + '개 묶음'); }
+
+const cpDay_ = s => { if (!s) return null; const t = String(s); return /^\d{4}-\d{2}-\d{2}/.test(t) && !/Z$|[+-]\d\d:?\d\d$/.test(t) ? t.slice(0, 10) : ymd_(new Date(t)); };
+const cpN_ = v => Number(String(v == null ? 0 : (typeof v === 'object' && v.units != null ? v.units : v)).replace(/[^0-9.\-]/g, '')) || 0;
+/** 결제금액 = 판매가×수량(orderPrice) − 판매자 부담 할인(discountPrice). 쿠팡 부담 할인은 판매자 매출에서 빼지 않음 */
+const cpItemAmt_ = it => { const q = cpN_(it.shippingCount) + cpN_(it.cancelCount); const gross = cpN_(it.orderPrice) || cpN_(it.salesPrice) * q; return Math.max(0, gross - cpN_(it.discountPrice)); };
+
+function cpParse_(raw, write) {
+  const days = {}; for (let d = raw.d1; d <= raw.d2; d = ymd_(addDays_(new Date(d + 'T12:00:00+09:00'), 1)))
+    days[d] = { date: d, ch: '쿠팡', pay: 0, orders: new Set(), qty: 0, cancel: 0, cancelCnt: 0, refund: 0, refundCnt: 0, note: '쿠팡API(서버)' };
+  const P = {}; const prod = (d, code, name) => { const k = d + '|' + code; return P[k] || (P[k] = { date: d, code, name: name || code, qty: 0, amt: 0, cancelQty: 0, cancelAmt: 0, retQty: 0, retAmt: 0, exQty: 0 }); };
+  const unit = {}, pname = {}, seen = new Set();
+  (raw.sheets || []).concat(raw.details || []).forEach(o => (o.orderItems || []).forEach(it => {
+    const q = cpN_(it.shippingCount) + cpN_(it.cancelCount); const amt = cpItemAmt_(it); const code = String(it.sellerProductId || it.productId || it.vendorItemId);
+    const name = it.sellerProductName || it.vendorItemName || code;
+    unit[o.orderId + '|' + it.vendorItemId] = { p: q ? amt / q : amt, code, name }; pname[it.vendorItemId] = { code, name };
+    const key = o.orderId + '|' + it.vendorItemId + '|' + (o.shipmentBoxId || ''); if (seen.has(key)) return; seen.add(key);
+    const d = cpDay_(o.paidAt || o.orderedAt); if (!days[d]) return;
+    days[d].pay += amt; days[d].qty += q; days[d].orders.add(String(o.orderId)); const p = prod(d, code, name); p.qty += q; p.amt += amt; }));
+  const claimItems = r => r.returnItems || r.returnItemDtos || r.items || [];
+  const claim = (r, kind) => { const d = cpDay_(kind === 'cancel' ? (r.completeConfirmDate || r.cancelCompletedAt || r.createdAt) : (r.completeConfirmDate || r.returnCompletedAt)); if (!days[d]) return;
+    let any = false;
+    claimItems(r).forEach(it => { const q = cpN_(it.cancelCount) || cpN_(it.purchaseCount) || 1; const u = unit[r.orderId + '|' + it.vendorItemId] || {}; const nm = u.code ? u : (pname[it.vendorItemId] || { code: String(it.sellerProductId || it.vendorItemId), name: it.sellerProductName || it.vendorItemName });
+      const a = (u.p || 0) * q; const p = prod(d, nm.code, nm.name); any = true;
+      if (kind === 'cancel') { p.cancelQty += q; p.cancelAmt += a; days[d].cancel += a; } else { p.retQty += q; p.retAmt += a; days[d].refund += a; } });
+    if (any) { if (kind === 'cancel') days[d].cancelCnt++; else days[d].refundCnt++; } };
+  (raw.cancels || []).forEach(r => claim(r, 'cancel'));
+  (raw.returns || []).forEach(r => { const st = String(r.receiptStatus || r.status || ''); const done = r.completeConfirmDate || /COMPLETED|CC/.test(st);
+    if (!done) return; claim(r, String(r.receiptType || '').toUpperCase() === 'CANCEL' || /RELEASE_STOP/.test(st) ? 'cancel' : 'return'); });
+  (raw.exchanges || []).forEach(x => { const d = cpDay_(x.createdAt); if (!days[d]) return;
+    (x.exchangeItemDtoV1s || x.exchangeItems || [{}]).forEach(it => { const nm = pname[it.vendorItemId] || { code: String(it.sellerProductId || it.vendorItemId || x.orderId), name: it.vendorItemName || it.sellerProductName };
+      prod(d, nm.code, nm.name).exQty += cpN_(it.quantity || it.targetItemQuantity) || 1; }); });
+  const rows = Object.values(days).map(r => Object.assign({}, r, { orders: r.orders.size, pay: Math.round(r.pay), cancel: Math.round(r.cancel), refund: Math.round(r.refund) }));
+  if (write) { mergeLedger_(rows.map(r => buildRow_(r, 'API(서버)'))); replaceProducts_('쿠팡', raw.d1, raw.d2, Object.values(P), 'API(서버)'); }
+  const tot = rows.reduce((a, r) => { a.pay += r.pay; a.cancel += r.cancel; a.refund += r.refund; a.orders += r.orders; return a; }, { pay: 0, cancel: 0, refund: 0, orders: 0 });
+  return { d1: raw.d1, d2: raw.d2, days: rows.length, products: Object.keys(P).length, tot, errors: (raw.errors || []).length };
+}
+/** 편집기에서 실행: 보관 원본의 응답 형식·일별 결과 확인 (시트에 쓰지 않음) */
+function cpInspect(from, to) { from = from || '2026-10-01'; to = to || '2026-10-15';
+  const raws = cpLoadRaw_(from, to); const L = [];
+  raws.forEach(r => { const res = cpParse_(r, false); L.push(JSON.stringify(res)); });
+  const r0 = raws[0] || {}; const strip = o => JSON.stringify(o || null).slice(0, 2500);
+  L.push('SHEET ' + strip((r0.sheets || [])[0])); L.push('CANCEL ' + strip((r0.cancels || [])[0])); L.push('RETURN ' + strip((r0.returns || [])[0])); L.push('DETAIL ' + strip((r0.details || [])[0])); L.push('ERR ' + strip(r0.errors));
+  console.log(L.join('\n#### ')); }
+
 /* ============ bcrypt (네이버 서명용, bcryptjs 2.4.3 · Apache-2.0) ============ */
 /*
  bcrypt.js (c) 2013 Daniel Wirtz <dcode@dcode.io>
