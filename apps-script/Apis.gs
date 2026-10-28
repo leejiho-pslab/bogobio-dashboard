@@ -284,22 +284,17 @@ function cafe24Month_(start, end) {
   list('pay_date', '&embed=items').forEach(o => { const d = day(o.payment_date || o.order_date); if (!days[d] || !krw(o)) return;
     days[d].pay += cafe24Amt_(o); days[d].orders++;
     shares(o).forEach(({ it, q, a }) => { days[d].qty += q; const p = prod(d, it); p.qty += q; p.amt += a; }); });
-  try { list('cancel_date', '&embed=items').forEach(o => { if (!krw(o) || o.paid !== 'T') return; /* 결제된 주문의 취소만 */
-      const od = day(o.cancel_date); if (days[od]) { days[od].cancel += cafe24Amt_(o); days[od].cancelCnt++; }
-      const sh = shares(o); const anyC = sh.some(x => st(x.it) === 'C');
-      sh.forEach(({ it, q, a }) => { if (anyC && st(it) !== 'C') return; const d = day(it.cancel_date) || od; if (!days[d]) return;
-        const p = prod(d, it); const cq = claimQty(it, q); p.cancelQty += cq; p.cancelAmt += q ? a * cq / q : a; }); }); }
-  catch (e) { console.log('취소 조회 생략: ' + e.message); }
-  // 반품(환불): 반품 완료일 기준. 날짜 종류 이름이 버전에 따라 달라 순서대로 시도
-  for (const dt of ['return_date', 'refund_date']) {
-    try { const seen = {}; list(dt, '&embed=items').forEach(o => { if (!krw(o)) return;
-        shares(o).forEach(({ it, q, a }) => { if (st(it) !== 'R') return; const d = day(it.return_confirmed_date || it.refund_date || o.return_confirmed_date || o.refund_date); if (!days[d]) return;
-          const rq = claimQty(it, q), ra = q ? a * rq / q : a; const p = prod(d, it); p.retQty += rq; p.retAmt += ra;
-          days[d].refund = (days[d].refund || 0) + ra; if (!seen[d + o.order_id]) { seen[d + o.order_id] = 1; days[d].refundCnt = (days[d].refundCnt || 0) + 1; } }); });
-      Object.values(days).forEach(r => { if (r.refund === '') { r.refund = 0; r.refundCnt = 0; } }); break; }
-    catch (e) { console.log(dt + ' 조회 실패: ' + e.message); }
-  }
-  try { list('exchange_date', '&embed=items').forEach(o => { if (!krw(o)) return;
+  // 취소·반품: 카페24는 둘 다 cancel_date 조회에 나옴 → 상품 상태로 구분 (C 취소, R 반품). 결제된 주문만
+  try { const seenC = {}, seenR = {};
+    list('cancel_date', '&embed=items').forEach(o => { if (!krw(o) || o.paid !== 'T') return; const od = day(o.cancel_date);
+      shares(o).forEach(({ it, q, a }) => { const s = st(it); if (s !== 'C' && s !== 'R') return; const cq = claimQty(it, q), ca = q ? a * cq / q : a;
+        if (s === 'C') { const d = day(it.cancel_date) || od; if (!days[d]) return; const p = prod(d, it); p.cancelQty += cq; p.cancelAmt += ca;
+          days[d].cancel += ca; if (!seenC[d + o.order_id]) { seenC[d + o.order_id] = 1; days[d].cancelCnt++; } }
+        else { let d = day(it.return_confirmed_date || it.refund_date); if (!days[d]) d = day(it.cancel_date) || od; if (!days[d]) return; const p = prod(d, it); p.retQty += cq; p.retAmt += ca;
+          days[d].refund = (days[d].refund || 0) + ca; if (!seenR[d + o.order_id]) { seenR[d + o.order_id] = 1; days[d].refundCnt = (days[d].refundCnt || 0) + 1; } } }); });
+    Object.values(days).forEach(r => { if (r.refund === '') { r.refund = 0; r.refundCnt = 0; } }); }
+  catch (e) { console.log('취소·반품 조회 생략: ' + e.message); }
+  try { list('exchange_complete_date', '&embed=items').forEach(o => { if (!krw(o)) return;
       (o.items || []).forEach(it => { if (st(it) !== 'E') return; const d = day(it.exchange_date || o.exchange_date); if (!days[d]) return; prod(d, it).exQty += claimQty(it, num(it.quantity)); }); }); }
   catch (e) { console.log('교환 조회 생략: ' + e.message); }
   const rows = Object.values(days).map(r => { r.pay = Math.round(r.pay); r.cancel = Math.round(r.cancel); if (r.refund !== '') r.refund = Math.round(r.refund); return buildRow_(r, 'API'); });
@@ -317,7 +312,7 @@ function monthly15_() {
 
 /** 실제 응답 필드 확인용(문제 생길 때만): 해당 날짜 주문 1건의 상품 항목 키를 로그로 */
 function _probe(date) { date = date || ymd_(addDays_(new Date(), -1));
-  ['pay_date', 'cancel_date', 'return_date', 'exchange_date'].forEach(dt => { try { const j = cafe24Get_(`/admin/orders?shop_no=2&start_date=${date.slice(0, 8)}01&end_date=${date}&date_type=${dt}&limit=1&embed=items`); const o = (j.orders || [])[0];
+  ['pay_date', 'cancel_date', 'exchange_complete_date'].forEach(dt => { try { const j = cafe24Get_(`/admin/orders?shop_no=2&start_date=${date.slice(0, 8)}01&end_date=${date}&date_type=${dt}&limit=1&embed=items`); const o = (j.orders || [])[0];
     console.log(dt + ': ' + (o ? JSON.stringify(Object.assign({}, o.items && o.items[0], { _order_keys: Object.keys(o).join(',') })).slice(0, 3000) : '없음')); } catch (e) { console.log(dt + ' 오류 ' + e.message); } }); }
 
 /* ============ bcrypt (네이버 서명용, bcryptjs 2.4.3 · Apache-2.0) ============ */
