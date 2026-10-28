@@ -17,6 +17,8 @@ const CHANNELS = [
 ];
 const GROUP_OF = Object.fromEntries(CHANNELS.map(c => [c[1], c[2]]));
 const LEDGER_HEAD = ['날짜', '채널', '결제금액', '결제건수', '판매수량', '취소금액', '취소건수', '환불금액', '환불건수', '순매출', '방문자', '신규문의', '미답변문의', '신규리뷰', '비고', '입력방식', '입력시각'];
+const PROD_HEAD = ['날짜', '채널', '상품코드', '상품명', '판매수량', '판매금액', '취소수량', '취소금액', '반품수량', '반품금액', '교환수량', '입력방식', '입력시각'];
+const PMASTER_HEAD = ['채널', '상품코드', '상품명(채널 원본)', '표준제품명', '최초등록'];
 const FORM_FIELDS = [ // [제목, 도움말, 필수]
   ['결제금액(원)', '해당 날짜에 결제 완료된 금액 합계. 숫자만', true],
   ['결제건수', '주문 건수', true],
@@ -159,6 +161,9 @@ function handle_(p) {
         if (p.merge && typeof mergeLedger_ === 'function') { mergeLedger_(rows); return out({ ok: true, merged: rows.length }); }
         return out(Object.assign({ ok: true }, upsertLedger_(rows)));
       }
+      case 'products': { // {ch, d1, d2, rows:[{date, code, name, qty, amt, cancelQty, cancelAmt, retQty, retAmt, exQty}]} → 그 채널·기간 제품 행을 통째로 교체
+        return out(Object.assign({ ok: true }, replaceProducts_(p.ch, normDate_(p.d1), normDate_(p.d2), p.rows || [], p.method || 'API')));
+      }
       case 'alert': { return out({ ok: true, sent: tg_(String(p.text || '').slice(0, 3500)) });
       }
       case 'push': return out({ ok: true, sent: sendDaily_(p.date) });
@@ -181,7 +186,8 @@ function buildData_() {
   const targets = sheetObjects_(ss.getSheetByName('월목표')).filter(t => t.연월).map(t => ({ ym: t.연월, 스마트스토어: num_(t.스마트스토어), 쿠팡: num_(t.쿠팡), 자사몰: num_(t.자사몰), 외부몰: num_(t.외부몰), total: num_(t.합계) }));
   const mis = ss.getSheetByName('불일치기록'); const mismatch = mis && mis.getLastRow() > 1 ? mis.getRange(2, 1, mis.getLastRow() - 1, 7).getValues() : [];
   const asof = daily.length ? daily.map(d => d.date).sort().pop() : null;
-  return { asof, generated: Utilities.formatDate(new Date(), TZ, 'yyyy-MM-dd HH:mm'), monthly, daily, targets, mismatch, channels: CHANNELS.map(c => ({ code: c[0], name: c[1], group: c[2] })) };
+  let products = null; try { products = buildProducts_(asof); } catch (e) { products = { error: String(e) }; }
+  return { asof, generated: Utilities.formatDate(new Date(), TZ, 'yyyy-MM-dd HH:mm'), monthly, daily, targets, mismatch, products, channels: CHANNELS.map(c => ({ code: c[0], name: c[1], group: c[2] })) };
 }
 
 
@@ -210,6 +216,56 @@ function mergedMonthly_(daily, hist) {
   Object.keys(agg).forEach(k => { if (histKeys.has(k)) return; const [ym, g] = k.split('|'); const [y, m] = ym.split('-').map(Number); const a = agg[k];
     out.push({ y, m, ch: g, sales: a.sales, orders: a.orders, qty: a.qty, visitors: a.visitors }); });
   return out;
+}
+
+/* ============ 3-1. 제품별 판매 ============ */
+/** 채널명 원본에서 표준제품명 1차 추정: [..] (..) 괄호·브랜드명 제거. 시트 '제품마스터'에서 사람이 고치면 그 값이 우선 */
+function normProd_(name) {
+  const s = String(name || '').replace(/\[[^\]]*\]|【[^】]*】/g, ' ').replace(/보고바이오|BOGOBIO/gi, ' ').replace(/\s+/g, ' ').trim();
+  return s || String(name || '').trim();
+}
+/** 채널 ch의 [d1, d2] 기간 제품 행을 새 값으로 교체 (재수집해도 중복되지 않음) */
+function replaceProducts_(ch, d1, d2, rows, method) {
+  if (!ch || !d1 || !d2) throw new Error('products: ch, d1, d2 필요');
+  const lock = LockService.getScriptLock(); lock.waitLock(120000);
+  try {
+    const ss = getSS_(); const sh = ensureSheet_(ss, '제품원장', PROD_HEAD);
+    sh.getRange('A:C').setNumberFormat('@');
+    const last = sh.getLastRow(); const W = PROD_HEAD.length;
+    const old = last > 1 ? sh.getRange(2, 1, last - 1, W).getValues() : [];
+    const keep = old.filter(r => r[0] && !(r[1] === ch && normDate_(r[0]) >= d1 && normDate_(r[0]) <= d2)).map(r => { r[0] = normDate_(r[0]); return r; });
+    const n = v => Number(v) || 0; const now = Utilities.formatDate(new Date(), TZ, 'yyyy-MM-dd HH:mm');
+    const add = rows.map(r => Object.assign({}, r, { date: normDate_(r.date) })).filter(r => r.date >= d1 && r.date <= d2 && (n(r.qty) || n(r.cancelQty) || n(r.retQty) || n(r.exQty)))
+      .map(r => [r.date, ch, String(r.code), String(r.name || ''), n(r.qty), Math.round(n(r.amt)), n(r.cancelQty), Math.round(n(r.cancelAmt)), n(r.retQty), Math.round(n(r.retAmt)), n(r.exQty), method || 'API', now]);
+    const all = keep.concat(add).sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : (a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0));
+    if (last > 1) sh.getRange(2, 1, last - 1, W).clearContent();
+    if (all.length) sh.getRange(2, 1, all.length, W).setValues(all);
+    const newProducts = updateProductMaster_(ss, ch, add);
+    SpreadsheetApp.flush();
+    return { replaced: old.length - keep.length, written: add.length, newProducts };
+  } finally { lock.releaseLock(); }
+}
+function updateProductMaster_(ss, ch, add) {
+  const sh = ensureSheet_(ss, '제품마스터', PMASTER_HEAD); sh.getRange('A:B').setNumberFormat('@');
+  const have = new Set(sheetObjects_(sh).map(m => m.채널 + '|' + m.상품코드));
+  const seen = new Set(); const today = ymd_(new Date());
+  const rows = add.filter(r => { const k = ch + '|' + r[2]; if (have.has(k) || seen.has(k)) return false; seen.add(k); return true; }).map(r => [ch, r[2], r[3], normProd_(r[3]), today]);
+  if (rows.length) sh.getRange(sh.getLastRow() + 1, 1, rows.length, PMASTER_HEAD.length).setValues(rows);
+  return rows.length;
+}
+/** 대시보드용: 월별(전체 기간) + 일별(최근 120일), 표준제품명 기준. 배열로 압축 */
+function buildProducts_(asof) {
+  const ss = getSS_(); const sh = ss.getSheetByName('제품원장'); if (!sh || sh.getLastRow() < 2) return { cols: [], m: [], d: [] };
+  const std = {}; sheetObjects_(ss.getSheetByName('제품마스터')).forEach(m => { std[m.채널 + '|' + m.상품코드] = String(m.표준제품명 || m['상품명(채널 원본)'] || m.상품코드).trim(); });
+  const v = sh.getRange(2, 1, sh.getLastRow() - 1, 11).getValues();
+  const cut = asof ? ymd_(addDays_(new Date(asof + 'T12:00:00+09:00'), -119)) : '0000';
+  const M = {}, Dd = {};
+  const addTo = (map, k, head, r) => { const a = map[k] || (map[k] = head.concat([0, 0, 0, 0, 0, 0, 0])); for (let i = 0; i < 7; i++) a[head.length + i] += Number(r[4 + i]) || 0; };
+  v.forEach(r => { if (!r[0]) return; const d = normDate_(r[0]); const ch = r[1]; const name = std[ch + '|' + r[2]] || normProd_(r[3]);
+    addTo(M, d.slice(0, 7) + '|' + ch + '|' + name, [d.slice(0, 7), ch, name], r);
+    if (d >= cut) addTo(Dd, d + '|' + ch + '|' + name, [d, ch, name], r); });
+  const round = a => a.map((x, i) => i < 3 ? x : Math.round(x * 10) / 10);
+  return { cols: ['기간', '채널', '제품', '판매수량', '판매금액', '취소수량', '취소금액', '반품수량', '반품금액', '교환수량'], m: Object.values(M).map(round), d: Object.values(Dd).map(round) };
 }
 
 /* ============ 4. 텔레그램 ============ */

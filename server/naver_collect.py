@@ -6,6 +6,8 @@
   python3 naver_collect.py 2026-10-16      # 특정 날짜
   python3 naver_collect.py 2026-10-16 2026-10-26   # 기간 소급 수집
   python3 naver_collect.py --test          # 어제 데이터를 시트에 쓰지 않고 화면에만 출력
+  매월 15일 자동 실행 때는 전전월 1일 ~ 어제를 다시 수집 (늦게 바뀐 취소·반품·교환 반영)
+  제품별 판매(수량·금액·취소·반품·교환)도 함께 시트 '제품원장'에 기록
 
 설정: 같은 폴더의 config.json (install.sh가 만듦, 권한 600)
   {"naver_id": "...", "naver_secret": "$2a$04$...", "api_url": "https://script.google.com/.../exec", "key": "대시보드 비밀번호"}
@@ -122,27 +124,44 @@ def collect(days, detail=False):
     ids = list(changed_ids(start, now))
     print(f"  found {len(ids)} product orders, fetching details ...", flush=True)
     B = {d: {"pay": 0.0, "qty": 0.0, "orders": set(), "cancel": 0.0, "cancelCnt": 0, "refund": 0.0, "refundCnt": 0, "lines": []} for d in days}
+    P = {}  # (날짜, 상품번호) → 제품별 집계
+
+    def prod(d, po):
+        code = str(po.get("productId") or po.get("originalProductId") or po.get("productName"))
+        k = (d, code)
+        if k not in P:
+            P[k] = {"date": d, "code": code, "name": po.get("productName") or code, "qty": 0.0, "amt": 0.0,
+                    "cancelQty": 0.0, "cancelAmt": 0.0, "retQty": 0.0, "retAmt": 0.0, "exQty": 0.0}
+        return P[k]
     for i in range(0, len(ids), 300):
         for x in npost("/v1/pay-order/seller/product-orders/query", {"productOrderIds": ids[i:i + 300]}).get("data") or []:
             o, po = x.get("order") or {}, x.get("productOrder") or {}
             amt = float(po.get("totalPaymentAmount") or 0)
+            q = float(po.get("quantity") or 0)
             pd = to_kst_date(o.get("paymentDate"))
             if pd in B:
-                b = B[pd]; b["pay"] += amt; b["qty"] += float(po.get("quantity") or 0); b["orders"].add(o.get("orderId"))
+                b = B[pd]; b["pay"] += amt; b["qty"] += q; b["orders"].add(o.get("orderId"))
+                p = prod(pd, po); p["qty"] += q; p["amt"] += amt
                 b["lines"].append(f"    {o.get('paymentDate','')[:19]}  {po.get('productOrderId')}  {int(amt):>9,}  x{po.get('quantity')}  {po.get('productOrderStatus','')}")
             cd = to_kst_date((x.get("cancel") or {}).get("cancelCompletedDate"))
             if cd in B:
                 B[cd]["cancel"] += amt; B[cd]["cancelCnt"] += 1
+                p = prod(cd, po); p["cancelQty"] += q; p["cancelAmt"] += amt
             rd = to_kst_date((x.get("return") or {}).get("returnCompletedDate"))
             if rd in B:
                 B[rd]["refund"] += amt; B[rd]["refundCnt"] += 1
+                p = prod(rd, po); p["retQty"] += q; p["retAmt"] += amt
+            ex = x.get("exchange") or {}
+            xd = to_kst_date(ex.get("claimRequestDate")) if ex and "REJECT" not in str(ex.get("claimStatus", "")) else None
+            if xd in B:
+                prod(xd, po)["exQty"] += q
     rows = []
     for d in days:
         b = B[d]; inq, unans = qna(d) if len(days) <= 31 else ("", "")  # 긴 소급 수집 때는 문의 조회 생략
         rows.append({"date": d, "ch": "스마트스토어", "pay": round(b["pay"]), "orders": len(b["orders"]), "qty": round(b["qty"], 1),
                      "cancel": round(b["cancel"]), "cancelCnt": b["cancelCnt"], "refund": round(b["refund"]), "refundCnt": b["refundCnt"],
                      "inq": inq, "unans": unans, "note": "네이버API(서버)", "_lines": b["lines"]})
-    return rows
+    return rows, list(P.values())
 
 
 def sheet(action, **kw):
@@ -155,12 +174,17 @@ def main(argv):
     yday = (datetime.now(KST) - timedelta(days=1)).strftime("%Y-%m-%d")
     d1 = args[0] if args else yday
     d2 = args[1] if len(args) > 1 else d1
+    today = datetime.now(KST)
+    if not args and today.day == 15:  # 매월 15일: 전전월 1일 ~ 어제 재수집
+        m = today.month - 2; y = today.year + (m - 1) // 12; m = (m - 1) % 12 + 1
+        d1 = f"{y}-{m:02d}-01"; d2 = yday
+        print(f"15th re-collect: {d1} ~ {d2}")
     days, d = [], kst_day(d1)
     while d <= kst_day(d2):
         days.append(d.strftime("%Y-%m-%d")); d += timedelta(days=1)
-    rows, errors = [], []
+    rows, prows, errors = [], [], []
     try:
-        rows = collect(days)
+        rows, prows = collect(days)
         for r in rows:
             if len(rows) > 40 and not r["pay"] and not r["cancel"] and "--detail" not in argv:
                 continue
@@ -171,12 +195,24 @@ def main(argv):
         errors.append(f"{d1}~{d2}: {e}"); print("ERROR " + errors[-1])
     for r in rows:
         r.pop("_lines", None)
+    if prows:
+        top = {}
+        for p in prows:
+            t = top.setdefault(p["name"], [0, 0, 0, 0]); t[0] += p["qty"]; t[1] += p["amt"]; t[2] += p["retQty"]; t[3] += p["exQty"]
+        print(f"PRODUCTS: {len(top)} items")
+        for n, t in sorted(top.items(), key=lambda kv: -kv[1][1])[:10]:
+            print(f"  {int(t[1]):>11,} KRW  qty {t[0]:g}  return {t[2]:g}  exchange {t[3]:g}  | {n[:40]}")
     if test:
         print("(--test: not written to the sheet)"); return 1 if errors else 0
     if rows:
         for i in range(0, len(rows), 60):  # 60일씩 나눠 전송
             print(f"Sheet result ({rows[i]['date']}~{rows[min(i + 59, len(rows) - 1)]['date']}):",
                   sheet("submit", rows=rows[i:i + 60], method="API(서버)", merge=True), flush=True)
+    if not errors:
+        for i in range(0, len(days), 60):  # 제품별도 60일씩, 그 기간을 통째로 교체
+            a, b = days[i], days[min(i + 59, len(days) - 1)]
+            part = [p for p in prows if a <= p["date"] <= b]
+            print(f"Products ({a}~{b}):", sheet("products", ch="스마트스토어", d1=a, d2=b, rows=part, method="API(서버)"), flush=True)
     if errors:
         try:
             sheet("alert", text="⚠️ <b>스마트스토어 자동 수집 오류</b>\n" + "\n".join(errors)[:1500] +
