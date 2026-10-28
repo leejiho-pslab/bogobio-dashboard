@@ -205,7 +205,9 @@ function mergedMonthly_(daily, hist) {
     const [y, m] = ym.split('-').map(Number); let delta = 0; let sumRow = null;
     byYm[ym].forEach(h => {
       if (h.채널명 === '합계') { sumRow = h; return; }
-      const a = agg[ym + '|' + h.채널명]; histKeys.add(ym + '|' + h.채널명);
+      let a = agg[ym + '|' + h.채널명]; histKeys.add(ym + '|' + h.채널명);
+      // 외부몰은 몰별 수집이 끝나기 전까지 원장이 일부 몰만 담고 있을 수 있어, 과거 엑셀 합계가 더 크면 엑셀 값을 유지
+      if (a && h.채널명 === '외부몰' && (num_(h.매출) || 0) > a.sales) a = null;
       if (a) { delta += a.sales - (num_(h.매출) || 0); out.push({ y, m, ch: h.채널명, sales: a.sales, orders: a.orders, qty: a.qty, visitors: a.visitors != null ? a.visitors : num_(h.방문자) }); }
       else out.push({ y, m, ch: h.채널명, sales: num_(h.매출), orders: num_(h.주문건수), qty: num_(h.판매개수), visitors: num_(h.방문자) });
     });
