@@ -76,6 +76,7 @@ th{font-weight:600;color:var(--fg-2);font-size:12px;background:var(--surface-2);
 th:first-child,td:first-child{text-align:left}
 td.dim{color:var(--fg-3)}
 tr.sum td{font-weight:600;background:var(--surface-2)}
+tr.gap td{background:var(--warn-bg);color:var(--fg-2)}
 .dot{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:6px;vertical-align:middle}
 .tg{background:var(--surface-2);border-radius:var(--r);padding:14px 16px;font-size:13px;line-height:1.7;white-space:pre-wrap}
 .notes{display:grid;gap:8px}
@@ -241,7 +242,7 @@ table.defs td{white-space:normal;text-align:left;vertical-align:top;min-width:11
   <section class="panel" id="secProducts">
     <div class="panel-h"><h2><span id="mpTitle">제품 판매 현황</span> <span class="muted small" id="mpSub"></span></h2><button class="btn" id="mpMore">제품 분석에서 자세히 →</button></div>
     <div id="mpBody"></div>
-    <div class="small muted">위 기간·채널 선택을 그대로 따릅니다 · 행을 누르면 제품 분석 탭에서 그 제품의 흐름을 엽니다 · 흐름 막대 = 최근 12개월 월별 판매수량</div>
+    <div class="small muted">위 기간·채널 선택을 그대로 따릅니다 · 합계 = 채널 매출(노란 ⚠ 행 = 제품별 미수집분) · 행을 누르면 제품 분석 탭에서 그 제품의 흐름을 엽니다 · 흐름 막대 = 최근 12개월 월별 판매수량</div>
   </section>
 
   <section class="panel">
@@ -428,25 +429,34 @@ function prodStats(from,to,sel){
     a.tag = !hasPrev ? null : !b||(!b.qty&&!b.amt) ? ['new','신규'] : a.g!=null&&a.g>=50&&a.share>=3 ? ['up','급상승'] : a.g!=null&&a.g<=-30 ? ['down','하락'] : null;
     a.warn = a.rq>=2&&a.rr>=5 ? ['warn','반품 주의'] : null; });
   const gone=Object.values(prev).filter(b=>b.qty>0&&!(cur[b.p]&&cur[b.p].qty>0)&&b.amt>=T.amt*0.01);
-  return {n,pFrom,pTo,hasPrev,list,T,PT,prev,gone};
+  list.forEach(a=>a.net=a.amt-a.ca-a.ra);
+  // 원장(채널 매출)과 맞추기: 채널별 결제금액·순매출 − 제품 합계 차이를 '제품별 미수집' 행으로 표시 → 합계 = 채널 매출
+  const led={}, prd={};
+  D.filter(r=>r.date>=from&&r.date<=to&&chMatch(sel,r.ch)).forEach(r=>{ const l=led[r.ch]||(led[r.ch]={pay:0,net:0}); const net=r.net||0; l.net+=net; l.pay+=(r.pay!=null?r.pay:net+(r.cancel||0)+(r.refund||0)); });
+  PD.filter(r=>r.k>=from&&r.k<=to&&chMatch(sel,r.ch)).forEach(r=>{ const q=prd[r.ch]||(prd[r.ch]={pay:0,net:0}); q.pay+=r.amt; q.net+=r.amt-r.ca-r.ra; });
+  const gaps=Object.keys(led).map(ch=>{ const a=led[ch], b=prd[ch]||{pay:0,net:0}; return {p:'⚠ 제품별 미수집 · '+ch, ch, gap:true, full:!prd[ch], amt:a.pay-b.pay, net:a.net-b.net}; }).filter(g=>Math.abs(g.amt)>=1000||Math.abs(g.net)>=1000).sort((a,b)=>b.amt-a.amt);
+  T.net=list.reduce((s,a)=>s+a.net,0)+gaps.reduce((s,g)=>s+g.net,0); T.amt+=gaps.reduce((s,g)=>s+g.amt,0);
+  list.forEach(a=>a.share=T.amt?a.amt/T.amt*100:0); gaps.forEach(g=>g.share=T.amt?g.amt/T.amt*100:0);
+  return {n,pFrom,pTo,hasPrev,list,T,PT,prev,gone,gaps};
 }
 const prodMini=(p,sel,toYm)=>{ const last12=ymRange(ymAdd(toYm,-11),toYm); const v=last12.map(ym=>PM.filter(r=>r.k===ym&&r.p===p&&chMatch(sel,r.ch)).reduce((s,r)=>s+r.qty,0)); const mx=Math.max(...v,1);
   return `<span class="mini" title="${last12.map((ym,i)=>ymLbl(ym)+' '+v[i]+'개').join('\n')}">${v.map(x=>x>0?`<i style="height:${Math.max(3,Math.round(x/mx*22))}px"></i>`:'<i class="z"></i>').join('')}</span>`; };
 function prodRowsHtml(rowsT,st,sel,toYm,selP){
-  return rowsT.map((a,i)=>`<tr data-p="${esc(a.p)}" class="${selP===a.p?'sel':''}"><td class="dim">${i+1}</td><td class="name" style="text-align:left" title="${esc(a.p)}">${esc(a.p)}${a.tag?`<span class="tag ${a.tag[0]}">${a.tag[1]}</span>`:''}${a.warn?`<span class="tag warn">${a.warn[1]}</span>`:''}</td><td>${(+a.qty.toFixed(1)).toLocaleString()}</td><td><b>${won(a.amt)}</b></td><td>${a.share.toFixed(1)}%</td><td class="${cls(a.g)}">${a.g==null?'–':fp(a.g)}</td><td class="${a.cq?'':'dim'}">${a.cq||'–'}</td><td class="${a.rq?'':'dim'}">${a.rq||'–'}</td><td class="${a.xq?'':'dim'}">${a.xq||'–'}</td><td class="${a.rr>=5?'down':'dim'}">${a.rr==null||!a.rq?'–':a.rr.toFixed(1)+'%'}</td><td>${prodMini(a.p,sel,toYm)}</td></tr>`).join('');
+  return rowsT.map((a,i)=>`<tr data-p="${esc(a.p)}" class="${selP===a.p?'sel':''}"><td class="dim">${i+1}</td><td class="name" style="text-align:left" title="${esc(a.p)}">${esc(a.p)}${a.tag?`<span class="tag ${a.tag[0]}">${a.tag[1]}</span>`:''}${a.warn?`<span class="tag warn">${a.warn[1]}</span>`:''}</td><td>${(+a.qty.toFixed(1)).toLocaleString()}</td><td><b>${won(a.amt)}</b></td><td>${won(a.net)}</td><td>${a.share.toFixed(1)}%</td><td class="${cls(a.g)}">${a.g==null?'–':fp(a.g)}</td><td class="${a.cq?'':'dim'}">${a.cq||'–'}</td><td class="${a.rq?'':'dim'}">${a.rq||'–'}</td><td class="${a.xq?'':'dim'}">${a.xq||'–'}</td><td class="${a.rr>=5?'down':'dim'}">${a.rr==null||!a.rq?'–':a.rr.toFixed(1)+'%'}</td><td>${prodMini(a.p,sel,toYm)}</td></tr>`).join('');
 }
-const PROD_HEAD_HTML='<thead><tr><th>#</th><th style="text-align:left">제품</th><th>판매수량</th><th>판매금액</th><th>비중</th><th>직전 대비</th><th>취소</th><th>반품</th><th>교환</th><th>반품률</th><th>흐름(12개월)</th></tr></thead>';
-const prodSumHtml=st=>{const T=st.T, pa=pct(T.amt,st.PT.amt); return `<tr class="sum"><td></td><td style="text-align:left">합계</td><td>${Math.round(T.qty).toLocaleString()}</td><td>${won(T.amt)}</td><td>100%</td><td class="${cls(st.hasPrev?pa:null)}">${st.hasPrev?fp(pa):'–'}</td><td>${Math.round(T.cq)}</td><td>${Math.round(T.rq)}</td><td>${Math.round(T.xq)}</td><td>${T.qty?(T.rq/T.qty*100).toFixed(1)+'%':'–'}</td><td></td></tr>`;};
+const PROD_HEAD_HTML='<thead><tr><th>#</th><th style="text-align:left">제품</th><th>판매수량</th><th>판매금액</th><th>순매출</th><th>비중</th><th>직전 대비</th><th>취소</th><th>반품</th><th>교환</th><th>반품률</th><th>흐름(12개월)</th></tr></thead>';
+const gapRowsHtml=st=>(st.gaps||[]).map(g=>`<tr class="gap"><td></td><td class="name" style="text-align:left" title="${g.full?'이 채널은 아직 제품별 데이터가 수집되지 않았습니다':'제품별 합계와 채널 매출의 차이(배송비·미분류 등)'}">${esc(g.p)}</td><td class="dim">–</td><td>${won(g.amt)}</td><td>${won(g.net)}</td><td>${g.share.toFixed(1)}%</td><td colspan="6" class="dim" style="text-align:left">${g.full?'제품별 수집 전 — 채널 매출만 반영':'제품 합계와 채널 매출 차이'}</td></tr>`).join('');
+const prodSumHtml=st=>{const T=st.T, pa=pct(T.amt,st.PT.amt); return gapRowsHtml(st)+`<tr class="sum"><td></td><td style="text-align:left">합계 <span class="small muted">(= 채널 매출)</span></td><td>${Math.round(T.qty).toLocaleString()}</td><td>${won(T.amt)}</td><td>${won(T.net)}</td><td>100%</td><td class="${cls(st.hasPrev?pa:null)}">${st.hasPrev?fp(pa):'–'}</td><td>${Math.round(T.cq)}</td><td>${Math.round(T.rq)}</td><td>${Math.round(T.xq)}</td><td>${T.qty?(T.rq/T.qty*100).toFixed(1)+'%':'–'}</td><td></td></tr>`;};
 
 /* 채널 화면(전체 포함) 안의 제품 판매 현황 — 상단 기간·채널 선택을 그대로 따름 */
 function mainProducts(){
   pvPrepare(); const box=document.getElementById('mpBody'); const sel=chName();
   document.getElementById('mpTitle').textContent=`${sel} 제품 판매 현황`;
-  const chHas=PD.some(r=>chMatch(sel,r.ch));
-  if(!PD.length||!chHas){ document.getElementById('mpSub').textContent=''; box.innerHTML=`<div class="empty" style="height:90px">${PD.length?`${sel}은(는) 아직 제품별 데이터가 수집되지 않은 채널입니다.`:'제품별 데이터 수집 전입니다.'} 현재 수집 채널: ${[...new Set(PD.map(r=>r.ch))].join(', ')||'없음'}</div>`; return; }
+  const chHas=PD.some(r=>chMatch(sel,r.ch))||D.some(r=>r.date>=S.from&&r.date<=S.to&&chMatch(sel,r.ch));
+  if(!chHas){ document.getElementById('mpSub').textContent=''; box.innerHTML=`<div class="empty" style="height:90px">${PD.length?`${sel}은(는) 아직 제품별 데이터가 수집되지 않은 채널입니다.`:'제품별 데이터 수집 전입니다.'} 현재 수집 채널: ${[...new Set(PD.map(r=>r.ch))].join(', ')||'없음'}</div>`; return; }
   const st=prodStats(S.from,S.to,sel); const rowsT=st.list.slice().sort((a,b)=>b.amt-a.amt); const top=rowsT.slice(0,10);
-  document.getElementById('mpSub').textContent=`${S.from} ~ ${S.to} · ${st.list.length}개 제품 · 판매 ${Math.round(st.T.qty).toLocaleString()}개 · 비교: 직전 ${st.n}일`+(rowsT.length>10?' · 상위 10개 표시':'');
-  box.innerHTML=st.list.length?`<div class="tbl"><table id="mpTbl">${PROD_HEAD_HTML}<tbody>${prodRowsHtml(top,st,sel,S.to.slice(0,7),null)}${prodSumHtml(st)}</tbody></table></div>`
+  document.getElementById('mpSub').textContent=`${S.from} ~ ${S.to} · ${st.list.length}개 제품 · 판매 ${Math.round(st.T.qty).toLocaleString()}개 · 비교: 직전 ${st.n}일`+(rowsT.length>10?' · 상위 10개 표시':'')+` · 합계 순매출 ${won(st.T.net)} = 상단 KPI`;
+  box.innerHTML=(st.list.length||st.gaps.length)?`<div class="tbl"><table id="mpTbl">${PROD_HEAD_HTML}<tbody>${prodRowsHtml(top,st,sel,S.to.slice(0,7),null)}${prodSumHtml(st)}</tbody></table></div>`
     :`<div class="empty" style="height:90px">선택 기간에 판매된 제품이 없습니다.</div>`;
   const tb=document.querySelector('#mpTbl tbody'); if(tb) tb.onclick=e=>{const tr=e.target.closest('tr[data-p]'); if(!tr) return; mpGo(tr.dataset.p);};
   document.getElementById('mpMore').onclick=()=>mpGo(null);
@@ -521,7 +531,7 @@ function renderProducts(){
   const chsIn=[...new Set(PD.filter(r=>r.k>=PV.from&&r.k<=PV.to&&chMatch(PV.ch,r.ch)).map(r=>r.ch))].sort((a,b)=>[...CH,...EXT].indexOf(a)-[...CH,...EXT].indexOf(b));
   document.getElementById('pvMx').innerHTML=`<thead><tr><th style="text-align:left">제품</th>${chsIn.map(c=>`<th>${c}</th>`).join('')}<th>합계</th></tr></thead><tbody>`
     +ord.slice(0,30).map(a=>`<tr><td style="text-align:left;max-width:280px;overflow:hidden;text-overflow:ellipsis" title="${esc(a.p)}">${esc(a.p)}</td>${chsIn.map(c=>{const v=a.chs[c]||0; return `<td class="${v?'':'dim'}">${v?Math.round(v/1e4).toLocaleString():'–'}</td>`;}).join('')}<td><b>${Math.round(a.amt/1e4).toLocaleString()}</b></td></tr>`).join('')+'</tbody>';
-  document.getElementById('pvNote').innerHTML=`제품명은 구글 시트 「제품마스터」 탭의 <b>표준제품명</b> 기준으로 묶입니다 (채널마다 다른 이름을 같은 이름으로 고치면 합쳐짐). 판매금액은 결제 기준이며, 자사몰은 주문 결제금액(배송비 포함)을 상품 금액 비율로 나눈 값입니다. 취소·반품·교환은 처리 완료일 기준.`;
+  document.getElementById('pvNote').innerHTML=`제품명은 구글 시트 「제품마스터」 탭의 <b>표준제품명</b> 기준으로 묶입니다 (채널마다 다른 이름을 같은 이름으로 고치면 합쳐짐). <b>합계는 채널 매출(상단 KPI의 순매출)과 같도록</b> 제품별 데이터가 없는 채널·차이는 노란 ⚠ 행으로 표시합니다. 판매금액은 결제 기준, 순매출 = 판매금액 − 취소 − 반품이며, 자사몰은 주문 결제금액(배송비 포함)을 상품 금액 비율로 나눈 값입니다. 취소·반품·교환은 처리 완료일 기준.`;
 }
 function pvDetail(){
   const box=document.getElementById('pvDetail'); if(!PV.sel){ box.hidden=true; return; } box.hidden=false; const p=PV.sel;
