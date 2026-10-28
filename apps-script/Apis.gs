@@ -391,8 +391,8 @@ function cpStoreRaw_(raw) {
     const txt = JSON.stringify(raw); const now = Utilities.formatDate(new Date(), TZ, 'yyyy-MM-dd HH:mm'); const add = [];
     for (let i = 0, k = 1; i < txt.length; i += 45000, k++) add.push([raw.d1, raw.d2, now, k, txt.slice(i, i + 45000)]);
     const all = keep.concat(add).sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[3] - b[3]);
-    if (last > 1) sh.getRange(2, 1, last - 1, 5).clearContent();
     if (all.length) sh.getRange(2, 1, all.length, 5).setValues(all);
+    if (last - 1 > all.length) sh.getRange(2 + all.length, 1, last - 1 - all.length, 5).clearContent();
   } finally { lock.releaseLock(); }
 }
 function cpLoadRaw_(from, to) {

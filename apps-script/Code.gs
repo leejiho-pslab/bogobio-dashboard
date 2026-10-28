@@ -241,8 +241,8 @@ function replaceProducts_(ch, d1, d2, rows, method) {
     const add = rows.map(r => Object.assign({}, r, { date: normDate_(r.date) })).filter(r => r.date >= d1 && r.date <= d2 && (n(r.qty) || n(r.cancelQty) || n(r.retQty) || n(r.exQty)))
       .map(r => [r.date, ch, String(r.code), String(r.name || ''), n(r.qty), Math.round(n(r.amt)), n(r.cancelQty), Math.round(n(r.cancelAmt)), n(r.retQty), Math.round(n(r.retAmt)), n(r.exQty), method || 'API', now]);
     const all = keep.concat(add).sort((a, b) => a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : (a[1] < b[1] ? -1 : a[1] > b[1] ? 1 : 0));
-    if (last > 1) sh.getRange(2, 1, last - 1, W).clearContent();
-    if (all.length) sh.getRange(2, 1, all.length, W).setValues(all);
+    if (all.length) sh.getRange(2, 1, all.length, W).setValues(all); // 먼저 덮어쓰고
+    if (last - 1 > all.length) sh.getRange(2 + all.length, 1, last - 1 - all.length, W).clearContent(); // 남는 줄만 지움 (읽는 쪽이 빈 표를 보는 순간이 없도록)
     const newProducts = updateProductMaster_(ss, ch, add);
     SpreadsheetApp.flush();
     return { replaced: old.length - keep.length, written: add.length, newProducts };
