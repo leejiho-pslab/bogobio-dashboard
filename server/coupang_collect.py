@@ -31,8 +31,8 @@ def scrub(o):
     return o
 
 
-def cp_get(path, params):
-    q = urllib.parse.urlencode({k: v for k, v in params.items() if v not in ("", None)})
+def cp_get(path, params, keep_empty=()):
+    q = urllib.parse.urlencode({k: v for k, v in params.items() if v is not None and (v != "" or k in keep_empty)})
     for attempt in range(6):
         dt = datetime.now(timezone.utc).strftime("%y%m%dT%H%M%SZ")
         sig = hmac.new(CFG["cp_secret"].encode(), (dt + "GET" + path + q).encode(), hashlib.sha256).hexdigest()
@@ -69,7 +69,7 @@ def paged_token(path, params):
     """매출내역(revenue-history)식 페이지: token='' 로 시작, hasNext/nextToken"""
     out, token = [], ""
     for _ in range(400):
-        j = cp_get(path, dict(params, token=token))
+        j = cp_get(path, dict(params, token=token), keep_empty=("token",))  # 첫 페이지는 token= (빈값) 필수
         out += j.get("data") or []
         if not j.get("hasNext") or not j.get("nextToken"):
             break
