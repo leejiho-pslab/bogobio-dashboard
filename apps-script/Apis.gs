@@ -422,6 +422,20 @@ function cpParse_(raw, write) {
     const key = o.orderId + '|' + it.vendorItemId + '|' + (o.shipmentBoxId || ''); if (seen.has(key)) return; seen.add(key);
     const d = cpDay_(o.paidAt || o.orderedAt); if (!days[d]) return;
     days[d].pay += amt; days[d].qty += q; days[d].orders.add(String(o.orderId)); const p = prod(d, code, name); p.qty += q; p.amt += amt; }));
+  // 로켓그로스(쿠팡 창고 배송) 주문: 결제일(paidAt, ms) 기준, 금액 = 판매단가 × 수량. 판매자배송 발주서와 주문번호가 겹치면 건너뜀
+  const rgOrders = new Set();
+  (raw.rg || []).forEach(o => { const oid = String(o.orderId); if (seen.has('RG|' + oid)) return; seen.add('RG|' + oid);
+    const d = cpDay_(typeof o.paidAt === 'number' ? new Date(o.paidAt).toISOString() : o.paidAt); if (!days[d]) return; rgOrders.add(oid);
+    (o.orderItems || []).forEach(it => { const q = cpN_(it.salesQuantity); const amt = cpN_(it.unitSalesPrice) * q; const code = String(it.vendorItemId); const name = it.productName || code;
+      pname[it.vendorItemId] = pname[it.vendorItemId] || { code, name }; unit[oid + '|' + it.vendorItemId] = { p: q ? amt / q : amt, code, name };
+      days[d].pay += amt; days[d].qty += q; days[d].orders.add(oid); const p = prod(d, code, name); p.qty += q; p.amt += amt; }); });
+  // 매출내역 REFUND 행 → 로켓그로스 반품(판매자배송 주문은 반품요청 API로 이미 잡히므로 제외). 날짜 = 매출인식일
+  const sellerOrders = new Set((raw.sheets || []).concat(raw.details || []).map(o => String(o.orderId)));
+  (raw.revenue || []).forEach(r => { if (String(r.saleType).toUpperCase() !== 'REFUND') return; const oid = String(r.orderId); if (!oid || oid === '0' || sellerOrders.has(oid)) return;
+    const d = cpDay_(r.recognitionDate); if (!days[d]) return; let any = false;
+    (r.items || []).forEach(it => { const q = Math.abs(cpN_(it.quantity)) || 1; const a = Math.abs(cpN_(it.saleAmount)) || Math.abs(cpN_(it.salePrice)) * q; const code = String(it.vendorItemId || it.productId); const name = it.vendorItemName || it.productName || code;
+      const p = prod(d, code, name); p.retQty += q; p.retAmt += a; days[d].refund += a; any = true; });
+    if (any) days[d].refundCnt++; });
   const claimItems = r => r.returnItems || r.returnItemDtos || r.items || [];
   const claim = (r, kind) => { const d = cpDay_(kind === 'cancel' ? (r.completeConfirmDate || r.cancelCompletedAt || r.createdAt) : (r.completeConfirmDate || r.returnCompletedAt)); if (!days[d]) return;
     let any = false;
@@ -438,14 +452,14 @@ function cpParse_(raw, write) {
   const rows = Object.values(days).map(r => Object.assign({}, r, { orders: r.orders.size, pay: Math.round(r.pay), cancel: Math.round(r.cancel), refund: Math.round(r.refund) }));
   if (write) { mergeLedger_(rows.map(r => buildRow_(r, 'API(서버)'))); replaceProducts_('쿠팡', raw.d1, raw.d2, Object.values(P), 'API(서버)'); }
   const tot = rows.reduce((a, r) => { a.pay += r.pay; a.cancel += r.cancel; a.refund += r.refund; a.orders += r.orders; return a; }, { pay: 0, cancel: 0, refund: 0, orders: 0 });
-  return { d1: raw.d1, d2: raw.d2, days: rows.length, products: Object.keys(P).length, tot, errors: (raw.errors || []).length };
+  return { d1: raw.d1, d2: raw.d2, days: rows.length, products: Object.keys(P).length, rg: rgOrders.size, tot, errors: (raw.errors || []).length };
 }
 /** 편집기에서 실행: 보관 원본의 응답 형식·일별 결과 확인 (시트에 쓰지 않음) */
 function cpInspect(from, to) { from = from || '2026-10-01'; to = to || '2026-10-15';
   const raws = cpLoadRaw_(from, to); const L = [];
   raws.forEach(r => { const res = cpParse_(r, false); L.push(JSON.stringify(res)); });
   const r0 = raws[0] || {}; const strip = o => JSON.stringify(o || null).slice(0, 2500);
-  L.push('SHEET ' + strip((r0.sheets || [])[0])); L.push('CANCEL ' + strip((r0.cancels || [])[0])); L.push('RETURN ' + strip((r0.returns || [])[0])); L.push('DETAIL ' + strip((r0.details || [])[0])); L.push('ERR ' + strip(r0.errors));
+  L.push('SHEET ' + strip((r0.sheets || [])[0])); L.push('CANCEL ' + strip((r0.cancels || [])[0])); L.push('RETURN ' + strip((r0.returns || [])[0])); L.push('DETAIL ' + strip((r0.details || [])[0])); L.push('RG ' + strip((r0.rg || [])[0])); L.push('REVENUE ' + strip((r0.revenue || [])[0])); L.push('ERR ' + strip(r0.errors));
   console.log(L.join('\n#### ')); }
 
 /* ============ bcrypt (네이버 서명용, bcryptjs 2.4.3 · Apache-2.0) ============ */

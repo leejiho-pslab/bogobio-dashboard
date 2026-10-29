@@ -65,10 +65,35 @@ def paged(path, params):
     return out
 
 
+def paged_token(path, params):
+    """매출내역(revenue-history)식 페이지: token='' 로 시작, hasNext/nextToken"""
+    out, token = [], ""
+    for _ in range(400):
+        j = cp_get(path, dict(params, token=token))
+        out += j.get("data") or []
+        if not j.get("hasNext") or not j.get("nextToken"):
+            break
+        token = j["nextToken"]
+    return out
+
+
 def fetch(a, b):
-    """[a, b] 기간 원본: 발주서(상태별) + 취소·반품 요청 + 교환 요청 + 취소·반품 주문의 상세"""
+    """[a, b] 기간 원본: 발주서(상태별) + 취소·반품 요청 + 교환 요청 + 취소·반품 주문의 상세
+    + 로켓그로스 주문(rg) + 매출내역(revenue: 로켓그로스 반품 파악용, 매출인식일 기준)"""
     base = f"/v2/providers/openapi/apis/api/v4/vendors/{V}"
-    raw = {"d1": a, "d2": b, "sheets": [], "cancels": [], "returns": [], "exchanges": [], "details": [], "errors": []}
+    raw = {"d1": a, "d2": b, "sheets": [], "cancels": [], "returns": [], "exchanges": [], "details": [], "rg": [], "revenue": [], "errors": []}
+    # 로켓그로스(쿠팡 창고 배송) 주문: 결제일 기준, 한 번에 30일 이내
+    try:
+        raw["rg"] = paged(f"/v2/providers/rg_open_api/apis/api/v1/vendors/{V}/rg/orders", {"paidDateFrom": a.replace("-", ""), "paidDateTo": b.replace("-", "")})
+    except Exception as e:
+        raw["errors"].append(f"rg orders: {e}")
+    # 매출내역: 매출인식일(구매확정일) 기준, 어제까지만 조회 가능. REFUND 행으로 로켓그로스 반품을 잡는다
+    yday = (datetime.now(KST) - timedelta(days=1)).strftime("%Y-%m-%d")
+    if a <= yday:
+        try:
+            raw["revenue"] = paged_token("/v2/providers/openapi/apis/api/v1/revenue-history", {"vendorId": V, "recognitionDateFrom": a, "recognitionDateTo": min(b, yday), "maxPerPage": 50})
+        except Exception as e:
+            raw["errors"].append(f"revenue: {e}")
     for st in STATUSES:
         try:
             raw["sheets"] += paged(base + "/ordersheets", {"createdAtFrom": a, "createdAtTo": b, "status": st, "maxPerPage": 50})
@@ -135,9 +160,13 @@ def main(argv):
         d1 = f"{y}-{m:02d}-01"
     if test:
         raw = fetch(yday, yday)
-        print(f"COUPANG TEST {yday}: sheets {len(raw['sheets'])} cancels {len(raw['cancels'])} returns {len(raw['returns'])} exchanges {len(raw['exchanges'])}")
+        print(f"COUPANG TEST {yday}: sheets {len(raw['sheets'])} rg {len(raw['rg'])} revenue {len(raw['revenue'])} cancels {len(raw['cancels'])} returns {len(raw['returns'])} exchanges {len(raw['exchanges'])}")
+        if raw["rg"]:
+            print("rg sample:", json.dumps(raw["rg"][0], ensure_ascii=False)[:400])
+        if raw["revenue"]:
+            print("revenue sample:", json.dumps(raw["revenue"][0], ensure_ascii=False)[:400])
         print("errors:", raw["errors"][:3] or "none")
-        return 1 if raw["errors"] and not raw["sheets"] else 0
+        return 1 if raw["errors"] and not raw["sheets"] and not raw["rg"] else 0
     cur = datetime.strptime(d1, "%Y-%m-%d"); end = datetime.strptime(d2, "%Y-%m-%d"); fails = []
     while cur <= end:
         b = min(cur + timedelta(days=6), end)
@@ -145,7 +174,7 @@ def main(argv):
         try:
             raw = fetch(a_s, b_s)
             res = sheet("coupang", raw=raw)
-            print(f"{a_s}~{b_s}: sheets {len(raw['sheets'])} cancel {len(raw['cancels'])} return {len(raw['returns'])} err {len(raw['errors'])} -> {str(res)[:160]}", flush=True)
+            print(f"{a_s}~{b_s}: sheets {len(raw['sheets'])} rg {len(raw['rg'])} rev {len(raw['revenue'])} cancel {len(raw['cancels'])} return {len(raw['returns'])} err {len(raw['errors'])} -> {str(res)[:160]}", flush=True)
             if not res.get("ok"):
                 fails.append(f"{a_s}~{b_s}: {str(res)[:150]}")
         except Exception as e:
