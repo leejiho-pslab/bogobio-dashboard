@@ -6,7 +6,7 @@
 개인정보(주문자·수취인·연락처·주소 등)는 보내기 전에 지운다.
 
 사용법
-  python3 coupang_collect.py                       # 어제 (매월 15일엔 전전월 1일 ~ 어제)
+  python3 coupang_collect.py                       # 최근 7일 (매월 15일엔 전전월 1일 ~ 어제)
   python3 coupang_collect.py 2025-01-01 2026-10-27 # 기간 소급
   python3 coupang_collect.py --test                # 연결 확인만 (시트에 쓰지 않음)
 설정: config.json 의 cp_vendor, cp_access, cp_secret (+ api_url, key)
@@ -125,7 +125,7 @@ def fetch(a, b):
         raw["exchanges"] = paged(base + "/exchangeRequests", {"createdAtFrom": a + "T00:00:00", "createdAtTo": b + "T23:59:59", "maxPerPage": 50})  # 교환은 요청일 기준
     except Exception as e:
         raw["errors"].append(f"exchange: {e}")
-    have = {str(s.get("orderId")) for s in raw["sheets"]}
+    have = {str(s.get("orderId")) for s in raw["sheets"]} | {str(o.get("orderId")) for o in raw["rg"]}
     need = {str(r.get("orderId")) for r in raw["cancels"] + raw["returns"] if r.get("orderId")} - have
     for oid in sorted(need):
         try:
@@ -153,7 +153,8 @@ def main(argv):
     test = "--test" in argv
     args = [a for a in argv if not a.startswith("--")]
     now = datetime.now(KST); yday = (now - timedelta(days=1)).strftime("%Y-%m-%d")
-    d1 = args[0] if args else yday
+    # 매일 실행: 로켓그로스 주문은 '출고 후'에야 API에 나오므로 최근 7일을 매번 다시 수집한다
+    d1 = args[0] if args else (now - timedelta(days=7)).strftime("%Y-%m-%d")
     d2 = args[1] if len(args) > 1 else (d1 if args else yday)
     if not args and now.day == 15:
         m = now.month - 2; y = now.year + (m - 1) // 12; m = (m - 1) % 12 + 1
