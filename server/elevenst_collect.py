@@ -122,19 +122,19 @@ def main(argv):
         m = now.month - 2; y = now.year + (m - 1) // 12; m = (m - 1) % 12 + 1; d1 = f"{y}-{m:02d}-01"
     if test:
         # 조회 경로 후보를 7일 구간 3개로 시험: 결과코드·메시지·건수·필드
-        cands = {"결제완료": "/ordservices/complete/{s}/{e}", "발주확인": "/ordservices/packaging/{s}/{e}",
-                 "배송중": "/ordservices/shipping/{s}/{e}", "배송완료": "/ordservices/completed/{s}/{e}",
-                 "구매확정": "/ordservices/purchaseconfirm/{s}/{e}",
-                 "취소": "/claimservice/cancelorders/{s}/{e}", "반품": "/claimservice/returnorders/{s}/{e}"}
-        for back in (7, 30, 60):
-            a = now - timedelta(days=back); b = a + timedelta(days=6)
+        cands = {"결제완료": "/ordservices/complete/{s}/{e}", "배송중": "/ordservices/shipping/{s}/{e}",
+                 "배송완료": "/ordservices/completed/{s}/{e}", "정산내역": "/settlement/settlementList/{s}/{e}",
+                 "정산(일자)": "/settlement/settlementList/{d1}/{d2}", "반품": "/claimservice/returnorders/{s}/{e}"}
+        for a, b in ((datetime(2026, 10, 9), datetime(2026, 10, 15)), (datetime(2026, 9, 13), datetime(2026, 9, 19))):
             s_, e_ = a.strftime("%Y%m%d0000"), b.strftime("%Y%m%d2359")
             print(f"== {a:%m/%d}~{b:%m/%d}")
             for nm, pth in cands.items():
                 try:
-                    raw = get(pth.format(s=s_, e=e_))
+                    raw = get(pth.format(s=s_, e=e_, d1=a.strftime("%Y%m%d"), d2=b.strftime("%Y%m%d")))
                     code = re.search(r"result_code>([^<]*)<", raw); txt = re.search(r"result_text>([^<]*)<", raw)
-                    rows = to_dicts(raw) if "<ns2:order>" in raw or "<order>" in raw else []
+                    rows = to_dicts(raw) if "order>" in raw else []
+                    if not rows and "result_code" not in raw:
+                        print(f"  {nm}: RAW {raw[:300]!r}")
                     print(f"  {nm}: code={code.group(1) if code else '-'} {txt.group(1)[:30] if txt else ''} 건수={len(rows)}" + (f" 필드={sorted(rows[0].keys())[:25]}" if rows else ""))
                 except Exception as ex:
                     print(f"  {nm}: ERR {str(ex)[:90]}")
