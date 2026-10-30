@@ -29,9 +29,15 @@ def get(path):
         try:
             with urllib.request.urlopen(req, timeout=60) as r:
                 time.sleep(0.3)
-                return r.read().decode("utf-8", "replace")
+                b = r.read()
+                for enc in ("cp949", "utf-8"):
+                    try:
+                        return b.decode(enc)
+                    except UnicodeDecodeError:
+                        pass
+                return b.decode("cp949", "replace")
         except urllib.error.HTTPError as e:
-            body = e.read().decode("utf-8", "replace")[:300]
+            body = e.read().decode("cp949", "replace")[:300]
             if e.code in (429, 500, 502, 503) and attempt < 3:
                 time.sleep(3 * (attempt + 1)); continue
             raise RuntimeError(f"{path.split('/')[1]} {e.code} {body}")
@@ -43,7 +49,8 @@ def strip_ns(tag):
 
 def to_dicts(xml_text):
     """<orders><order>...</order></orders> → [{필드: 값}] (네임스페이스 제거, 개인정보 필드 제거)"""
-    root = ET.fromstring(xml_text.encode("utf-8"))
+    xml_text = re.sub(r"^<\?xml[^>]*\?>", "", xml_text.strip())
+    root = ET.fromstring(xml_text)
     if strip_ns(root.tag).lower() in ("error", "errormessage") or root.find(".//{*}message") is not None and len(root) <= 2:
         raise RuntimeError("API 오류: " + "".join(root.itertext())[:200])
     rows = []
@@ -114,16 +121,23 @@ def main(argv):
     if not args and now.day == 15:
         m = now.month - 2; y = now.year + (m - 1) // 12; m = (m - 1) % 12 + 1; d1 = f"{y}-{m:02d}-01"
     if test:
-        s, e = yday.replace("-", "") + "0000", yday.replace("-", "") + "2359"
-        try:
-            raw = get(ORDER_PATH.format(s=s, e=e))
-        except Exception as ex:
-            print("ERROR", ex); return 1
-        print("RAW HEAD:", raw[:1500])
-        try:
-            rows = to_dicts(raw); print("orders:", len(rows)); print("fields:", sorted(rows[0].keys()) if rows else "-")
-        except Exception as ex:
-            print("parse:", ex)
+        # 조회 경로 후보를 7일 구간 3개로 시험: 결과코드·메시지·건수·필드
+        cands = {"결제완료": "/ordservices/complete/{s}/{e}", "발주확인": "/ordservices/packaging/{s}/{e}",
+                 "배송중": "/ordservices/shipping/{s}/{e}", "배송완료": "/ordservices/completed/{s}/{e}",
+                 "구매확정": "/ordservices/purchaseconfirm/{s}/{e}",
+                 "취소": "/claimservice/cancelorders/{s}/{e}", "반품": "/claimservice/returnorders/{s}/{e}"}
+        for back in (7, 30, 60):
+            a = now - timedelta(days=back); b = a + timedelta(days=6)
+            s_, e_ = a.strftime("%Y%m%d0000"), b.strftime("%Y%m%d2359")
+            print(f"== {a:%m/%d}~{b:%m/%d}")
+            for nm, pth in cands.items():
+                try:
+                    raw = get(pth.format(s=s_, e=e_))
+                    code = re.search(r"result_code>([^<]*)<", raw); txt = re.search(r"result_text>([^<]*)<", raw)
+                    rows = to_dicts(raw) if "<ns2:order>" in raw or "<order>" in raw else []
+                    print(f"  {nm}: code={code.group(1) if code else '-'} {txt.group(1)[:30] if txt else ''} 건수={len(rows)}" + (f" 필드={sorted(rows[0].keys())[:25]}" if rows else ""))
+                except Exception as ex:
+                    print(f"  {nm}: ERR {str(ex)[:90]}")
         return 0
     orders, errors = fetch_orders(d1, d2)
     rows, prods = aggregate(orders, d1, d2)
