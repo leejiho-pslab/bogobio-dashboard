@@ -54,14 +54,14 @@ description: 보고바이오 전 채널(스마트스토어·자사몰·쿠팡·G
 - 「개인정보 제3자 제공 동의」 팝업이 뜨면 누르지 말고 사용자에게 알린다.
 
 **아난티/무케렌시아 (이터널저니 https://biz.eternaljourney.co.kr/vmgr/ordr/list, `아난티/무케렌시아`)**
-- 페이지의 첫 번째 검색 폼에서 주문상태 체크박스 전부 체크, `dateType=2`(결제일), `startDate/endDate`(YYYY-MM-DD), `recordCountPerPage=500` 넣고 그 폼 action으로 POST → 응답 HTML의 '품목이름·결제일시'가 있는 표 파싱.
+- `POST /vmgr/ordr/list` 본문: `statCds`=20,30,40,50,60,99(주문상태만 — clmsTpCds·exchYn·cfmYn 체크박스는 넣지 말 것, 넣으면 클레임만 걸러져 0건), `dateType=2`(결제일), `startDate/endDate`, `searchCnd=1`, `recordCountPerPage=500` → 응답 HTML의 '품목이름·결제일시' 표 파싱.
 - 결제일시 앞 10자리, 주문번호(뒤 '열기' 제거), `'J'+품목코드`, 품목이름, 수량, 금액=`판매금액`(회원 할인 후). 상태 '주문취소' → 같은 날 cancel.
 
 **SSG (https://po.ssgadm.com, `SSG`) — 사용자 크롬(Claude in Chrome)에서**
 - 정산 관리 → 정산조회 → **위수탁 정산** → 업체별 상세내역(주문별: 정산일자·주문ID·상품코드·상품명·수량·판매단가·상품대총판매가·순판매액).
 - 「주문검색」 화면은 보고바이오 위수탁 주문이 나오지 않으니 쓰지 않는다.
 - 금액 = 순판매액(할인부담 반영), 날짜 = 정산일자. 위수탁 정산은 월 마감이라 **전월분이 다음 달 초에 확정** → 일별 수집 대신 매월 15일 재수집 때 전월분을 채운다.
-- (조회 방식 확정 후 여기 갱신)
+- 확정(10/30): 위수탁업체 마감리스트 화면(/se/vendor/listCommissionClose.ssg)에서 조회 한 번 → XHR `GET /se/vendor/getCommissionCloseListGridData.ssg` 주소를 잡아 `searchSettlYear=YYYYMM`만 바꿔 fetch(JSON gridRows). 셀[13]=순판매액 → 그 달 말일 날짜로 SSG 1행 기록. '상세조회' 버튼은 확인창을 띄워 탭이 멈추므로 누르지 않는다.
 
 **국군복지몰·공구·오프라인** — 관리자 사이트 없음: 구글폼(시트 '설정' 탭 FORM_URL) 담당자 입력분만 사용. 어제 입력이 없으면 "입력 필요"로 보고.
 
