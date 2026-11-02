@@ -227,6 +227,15 @@ function mergedMonthly_(daily, hist) {
 /** 채널명 원본에서 표준제품명 1차 추정: [..] (..) 괄호·브랜드명 제거. 시트 '제품마스터'에서 사람이 고치면 그 값이 우선 */
 function normProd_(name) {
   const s = String(name || '').replace(/\[[^\]]*\]|【[^】]*】/g, ' ').replace(/보고바이오|BOGOBIO/gi, ' ').replace(/\s+/g, ' ').trim();
+  // 산삼비책 진/원: 600ml = 30포 1박스, 1000ml = 50포 1박스 → 대시보드 제품군 규칙과 같은 표준명
+  const line = /산삼비책\s*진|블랙/.test(s) ? '산삼비책진 더 블랙' : /산삼비책\s*원|레드/.test(s) ? '산삼비책원 더 레드' : null;
+  let m;
+  if (line && !/세트|진\s*\+\s*원/.test(s)) {
+    const bx = (m = s.match(/(\d+)\s*박스/)) ? +m[1] : 1;
+    if (/1000\s*ml|1\s*kg|50\s*포/i.test(s)) return bx === 1 ? line + ' 50포(1kg)' : line + ' 50포 ' + bx + '박스';
+    if (/600\s*ml|30\s*포/i.test(s)) return bx === 1 ? line + ' 1박스(30포)' : line + ' ' + bx + '박스';
+  }
+  if ((m = s.match(/^김삼미 김스낵 (오리지널\+와사비|오리지널|와사비), 12g, (\d+)개/))) return '김삼미 김스낵 ' + m[1] + ' ' + m[2] + '개';
   return s || String(name || '').trim();
 }
 /** 채널 ch의 [d1, d2] 기간 제품 행을 새 값으로 교체 (재수집해도 중복되지 않음) */

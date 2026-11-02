@@ -434,6 +434,7 @@ function pFam(name){ if(FAM_CACHE[name]) return FAM_CACHE[name]; const n=String(
   else if((m=n.match(/^(.+?) 1박스\(30포\)/))) r=[m[1]+' 30포',1];
   else if((m=n.match(/^(산삼비책.+?) (\d+)박스$/))) r=[m[1]+' 30포',+m[2]];
   else if((m=n.match(/^(.+?) 기프트팩/))) r=[m[1]+' 기프트팩',1];
+  else if((m=n.match(/^(김삼미 김스낵 .+?) (\d+)개$/))) r=[m[1],+m[2]];
   else r=[n||name,1];
   return FAM_CACHE[name]={fam:r[0],mult:r[1]}; }
 const FAMOPEN=new Set();
