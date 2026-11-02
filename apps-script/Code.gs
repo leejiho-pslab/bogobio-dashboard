@@ -112,10 +112,16 @@ function createForm_(ss) {
   setSetting_('FORM_ID', form.getId(), '');
 }
 
-function installTriggers_() {
-  ScriptApp.getProjectTriggers().forEach(t => ScriptApp.deleteTrigger(t));
-  ScriptApp.newTrigger('onFormSubmit_').forSpreadsheet(getSS_()).onFormSubmit().create();
-  ScriptApp.newTrigger('armDailyPush_').timeBased().everyDays(1).atHour(6).create(); // 06~07시에 08:00 정시 트리거를 건다
+function installTriggers_() { restoreTriggers(); }
+/** 자동 실행 예약 전체 점검·복구 (이미 있는 건 그대로, 없는 것만 추가). 편집기에서 언제 실행해도 안전 */
+function restoreTriggers() {
+  const ss = getSS_(); const have = h => ScriptApp.getProjectTriggers().some(t => t.getHandlerFunction() === h);
+  if (!have('onFormSubmit_')) ScriptApp.newTrigger('onFormSubmit_').forSpreadsheet(ss).onFormSubmit().create();
+  if (!have('armDailyPush_')) ScriptApp.newTrigger('armDailyPush_').timeBased().everyDays(1).atHour(6).create(); // 06~07시에 08:00 정시 트리거를 건다
+  if (!have('collectYesterday')) ScriptApp.newTrigger('collectYesterday').timeBased().everyDays(1).atHour(7).nearMinute(30).create();
+  if (!have('monthly15_')) ScriptApp.newTrigger('monthly15_').timeBased().onMonthDay(15).atHour(5).create();
+  if (!have('onManualEdit_')) ScriptApp.newTrigger('onManualEdit_').forSpreadsheet(ss).onEdit().create();
+  const list = ScriptApp.getProjectTriggers().map(t => t.getHandlerFunction()); console.log('예약 ' + list.length + '개: ' + list.join(', ')); return list;
 }
 
 /* ============ 2-0. 수기 매출 입력 (국군복지몰 · 공동구매 · 오프라인) ============ */
@@ -295,6 +301,7 @@ function handle_(p) {
       case 'push': return out({ ok: true, sent: sendDaily_(p.date) });
       case 'weekly': return out({ ok: true, sent: sendWeekly_() });
       case 'monthly': return out({ ok: true, sent: sendMonthly_() });
+      case 'triggers': return out({ ok: true, list: restoreTriggers() });
       case 'preview': return out({ ok: true, text: dailyText_(p.date) });
       case 'previewWeekly': return out({ ok: true, text: weeklyText_() });
       case 'previewMonthly': return out({ ok: true, text: monthlyText_() });
