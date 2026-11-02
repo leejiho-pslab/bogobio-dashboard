@@ -102,9 +102,63 @@ function installTriggers_() {
   ScriptApp.newTrigger('armDailyPush_').timeBased().everyDays(1).atHour(6).create(); // 06~07시에 08:00 정시 트리거를 건다
 }
 
+/* ============ 2-0. 수기 매출 입력 (국군복지몰 · 공동구매 · 오프라인) ============ */
+const MANUAL_CH = { '국군복지몰': '국군복지몰', '공동구매': '공구', '공구': '공구', '오프라인': '오프라인' };
+const MANUAL_HEAD = ['타임스탬프', '날짜', '채널', '매출(원)', '주문건수', '판매개수', '비고'];
+/** 편집기에서 1회 실행: 수기 입력 전용 구글폼 생성 + 응답 탭 「수기입력」 연결 */
+function setupManualForm() {
+  const ss = getSS_();
+  if (getSetting_('MANUAL_FORM_URL')) { console.log('이미 있음: ' + getSetting_('MANUAL_FORM_URL')); return; }
+  const before = ss.getSheets().map(s => s.getSheetId());
+  const form = FormApp.create('보고바이오 수기 매출 입력 (국군복지몰 · 공동구매 · 오프라인)');
+  form.setDescription('판매 1건(또는 하루치)마다 제출하세요. 같은 날짜·채널로 여러 번 내면 합산됩니다.\n잘못 낸 건은 시트 「수기입력」 탭에서 직접 고치거나 지우면 됩니다(매일 아침 다시 합산). 숫자만, 콤마 없이.');
+  form.addDateItem().setTitle('날짜').setRequired(true).setHelpText('판매(결제)한 날짜');
+  form.addMultipleChoiceItem().setTitle('채널').setRequired(true).setChoiceValues(['국군복지몰', '공동구매', '오프라인']);
+  form.addTextItem().setTitle('매출(원)').setRequired(true).setHelpText('판매금액 합계. 취소·환불은 마이너스(-)로 입력');
+  form.addTextItem().setTitle('주문건수').setRequired(true).setHelpText('결제(주문) 건수. 1건에 여러 개 사도 1');
+  form.addTextItem().setTitle('판매개수').setRequired(true).setHelpText('실제 나간 제품 개수(박스 기준). 3박스 1건이면 3');
+  form.addParagraphTextItem().setTitle('비고').setHelpText('거래처·공구명·특이사항');
+  form.setDestination(FormApp.DestinationType.SPREADSHEET, ss.getId());
+  SpreadsheetApp.flush(); Utilities.sleep(2000);
+  const sh = getSS_().getSheets().find(s => !before.includes(s.getSheetId()));
+  if (sh) sh.setName('수기입력');
+  setSetting_('MANUAL_FORM_URL', form.getPublishedUrl(), '수기 매출 입력 폼(국군복지몰·공동구매·오프라인)');
+  setSetting_('MANUAL_FORM_EDIT_URL', form.getEditUrl(), '수기 폼 편집 주소');
+  if (!ScriptApp.getProjectTriggers().some(t => t.getHandlerFunction() === 'onFormSubmit_'))
+    ScriptApp.newTrigger('onFormSubmit_').forSpreadsheet(ss).onFormSubmit().create();
+  console.log('폼 주소: ' + form.getPublishedUrl());
+}
+/** 「수기입력」 탭 전체를 날짜·채널별로 합산해 원장에 반영 (탭에서 지운 날짜는 0으로) */
+function syncManual_() {
+  const ss = getSS_(); const sh = ss.getSheetByName('수기입력'); if (!sh || sh.getLastRow() < 2) return { synced: 0 };
+  const v = sh.getDataRange().getValues(); const h = v[0].map(x => String(x).trim());
+  const ix = k => h.indexOf(k); const n = x => Number(String(x == null ? '' : x).replace(/[^0-9.\-]/g, '')) || 0;
+  const agg = {};
+  v.slice(1).forEach(r => { const d = normDate_(r[ix('날짜')]); const ch = MANUAL_CH[String(r[ix('채널')]).trim()]; if (!d || !ch) return;
+    const k = d + '|' + ch; const a = agg[k] || (agg[k] = { date: d, ch, pay: 0, orders: 0, qty: 0, notes: [] });
+    a.pay += n(r[ix('매출(원)')]); a.orders += n(r[ix('주문건수')]); a.qty += n(r[ix('판매개수')]); const nt = String(r[ix('비고')] || '').trim(); if (nt) a.notes.push(nt); });
+  // 예전에 수기로 들어갔는데 탭에서 지워진 날짜·채널 → 0
+  const led = ss.getSheetByName('원장'); const lv = led.getLastRow() > 1 ? led.getRange(2, 1, led.getLastRow() - 1, LEDGER_HEAD.length).getValues() : [];
+  lv.forEach(r => { if (String(r[15]) === '수기(폼)' && Object.values(MANUAL_CH).includes(r[1])) { const k = normDate_(r[0]) + '|' + r[1]; if (!agg[k]) agg[k] = { date: normDate_(r[0]), ch: r[1], pay: 0, orders: 0, qty: 0, notes: ['수기입력에서 삭제됨'] }; } });
+  const rows = Object.values(agg).map(a => buildRow_({ date: a.date, ch: a.ch, pay: a.pay, orders: a.orders, qty: a.qty, cancel: 0, refund: 0, note: a.notes.join(' / ').slice(0, 200) }, '수기(폼)'));
+  if (rows.length) upsertLedger_(rows);
+  return { synced: rows.length };
+}
+/** API: 수기 행 추가(초기 이관용) rows:[{date, ch, pay, orders, qty, note}] */
+function manualAdd_(rows) {
+  const sh = getSS_().getSheetByName('수기입력'); if (!sh) throw new Error('수기입력 탭 없음 — setupManualForm 먼저 실행');
+  const h = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(x => String(x).trim());
+  const now = new Date();
+  const out = rows.map(r => h.map(k => ({ '타임스탬프': now, '날짜': r.date, '채널': r.ch, '매출(원)': r.pay, '주문건수': r.orders, '판매개수': r.qty, '비고': r.note || '' }[k] ?? '')));
+  if (out.length) sh.getRange(sh.getLastRow() + 1, 1, out.length, h.length).setValues(out);
+  SpreadsheetApp.flush();
+  return Object.assign({ added: out.length }, syncManual_());
+}
+
 /* ============ 2. 폼 응답 → 원장 ============ */
 function onFormSubmit_(e) {
   const nv = e.namedValues || {};
+  if (nv['매출(원)']) { syncManual_(); return; } // 수기 매출 폼 → 「수기입력」 합산 반영
   const g = k => (nv[k] && nv[k][0] != null ? String(nv[k][0]).trim() : '');
   const date = normDate_(g('날짜')); const ch = g('채널');
   if (!date || !ch) return;
@@ -165,6 +219,8 @@ function handle_(p) {
         return out(Object.assign({ ok: true }, replaceProducts_(p.ch, normDate_(p.d1), normDate_(p.d2), p.rows || [], p.method || 'API')));
       }
       case 'coupang': return out(Object.assign({ ok: true }, coupangIngest_(p.raw || {}))); // 서버가 보낸 쿠팡 원본 → 저장·집계
+      case 'manualAdd': return out(Object.assign({ ok: true }, manualAdd_(p.rows || [])));
+      case 'manualSync': return out(Object.assign({ ok: true }, syncManual_()));
       case 'master': return out({ ok: true, rows: sheetObjects_(getSS_().getSheetByName('제품마스터')) }); // 제품마스터 전체
       case 'masterSet': return out(Object.assign({ ok: true }, setMaster_(p.rows || []))); // rows:[{ch, code, std}] → 표준제품명 갱신
       case 'alert': { return out({ ok: true, sent: tg_(String(p.text || '').slice(0, 3500)) });

@@ -35,7 +35,7 @@ function installApiTrigger() {
   ScriptApp.newTrigger('monthly15_').timeBased().onMonthDay(15).atHour(5).create();
   console.log('매일 07:30 자동 수집 + 매월 15일 05시 전전월~어제 재수집 예약 완료');
 }
-function collectYesterday() { return collectDate(ymd_(addDays_(new Date(), -1))); }
+function collectYesterday() { try { syncManual_(); } catch (e) { console.log("수기 합산 생략: " + e.message); } return collectDate(ymd_(addDays_(new Date(), -1))); }
 
 /** 특정 날짜 수집. 예: collectDate('2026-10-26') */
 function collectDate(date) {
