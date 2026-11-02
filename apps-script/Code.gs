@@ -128,37 +128,88 @@ function setupManualForm() {
     ScriptApp.newTrigger('onFormSubmit_').forSpreadsheet(ss).onFormSubmit().create();
   console.log('폼 주소: ' + form.getPublishedUrl());
 }
-/** 「수기입력」 탭 전체를 날짜·채널별로 합산해 원장에 반영 (탭에서 지운 날짜는 0으로) */
-function syncManual_() {
-  const ss = getSS_(); const sh = ss.getSheetByName('수기입력'); if (!sh || sh.getLastRow() < 2) return { synced: 0 };
-  const v = sh.getDataRange().getValues(); const h = v[0].map(x => String(x).trim());
-  const ix = k => h.indexOf(k); const n = x => Number(String(x == null ? '' : x).replace(/[^0-9.\-]/g, '')) || 0;
-  const agg = {};
+/* ---- 엑셀형 입력표 「수기입력」: 날짜 1줄 × (국군복지몰·공동구매·오프라인) × (매출·주문건수·판매개수) ---- */
+const GRID_TAB = '수기입력';
+const GRID_CH = [['국군복지몰', '국군복지몰'], ['공동구매', '공구'], ['오프라인', '오프라인']]; // [표 제목, 원장 채널]
+const GRID_FIRST = 4; // 날짜 시작 행
+/** 편집기에서 1회 실행: 입력표 생성 + 기존 폼 응답(10월분 등) 옮기기 + 칸 고치면 바로 반영되는 트리거 */
+function setupManualGrid() {
+  const ss = getSS_();
+  const old = ss.getSheetByName(GRID_TAB);
+  let prev = {};
+  if (old && old.getRange(1, 1).getValue() !== '수기 매출 입력표') { // 예전 폼 응답 탭 → 값 읽고 이름 변경
+    prev = readFormTab_(old); old.setName('수기입력_폼응답(사용안함)');
+  }
+  let sh = ss.getSheetByName(GRID_TAB);
+  if (!sh) sh = ss.insertSheet(GRID_TAB, 1);
+  sh.clear(); sh.setFrozenRows(3); sh.setFrozenColumns(1);
+  sh.getRange('A1').setValue('수기 매출 입력표').setFontWeight('bold').setFontSize(13);
+  sh.getRange('C1').setValue('숫자만 입력(콤마 없이). 칸을 고치면 바로 대시보드에 반영됩니다. 취소·환불은 마이너스(-). 비어 있으면 판매 없음.').setFontColor('#666666');
+  sh.getRange(2, 1, 2, 1).merge().setValue('날짜');
+  GRID_CH.forEach(([t], k) => { sh.getRange(2, 2 + k * 3, 1, 3).merge().setValue(t); sh.getRange(3, 2 + k * 3, 1, 3).setValues([['매출', '주문건수', '판매개수']]); });
+  sh.getRange(2, 11, 2, 1).merge().setValue('비고');
+  const head = sh.getRange(2, 1, 2, 11); head.setFontWeight('bold').setHorizontalAlignment('center').setVerticalAlignment('middle').setBackground('#eef2f7');
+  [['#fff4e5', 2], ['#eaf6ec', 5], ['#eaf0fb', 8]].forEach(([c, col]) => sh.getRange(2, col, 2, 3).setBackground(c));
+  extendGrid_(sh, '2026-10-01');
+  // 옮기기(예전 폼 응답)
+  const dates = sh.getRange(GRID_FIRST, 1, sh.getLastRow() - GRID_FIRST + 1, 1).getValues().map(r => normDate_(r[0]));
+  Object.values(prev).forEach(a => { const r = dates.indexOf(a.date); const k = GRID_CH.findIndex(c => c[1] === a.ch); if (r < 0 || k < 0) return;
+    sh.getRange(GRID_FIRST + r, 2 + k * 3, 1, 3).setValues([[a.pay, a.orders, a.qty]]); });
+  sh.setColumnWidth(1, 96); for (let c = 2; c <= 10; c++) sh.setColumnWidth(c, 82); sh.setColumnWidth(11, 260);
+  if (!ScriptApp.getProjectTriggers().some(t => t.getHandlerFunction() === 'onManualEdit_'))
+    ScriptApp.newTrigger('onManualEdit_').forSpreadsheet(ss).onEdit().create();
+  const r = syncManual_(); console.log('입력표 준비 완료. 반영 ' + r.synced + '건');
+}
+/** 날짜 줄을 다음 달 말일까지 늘림 (월이 바뀌면 굵은 선으로 구분) */
+function extendGrid_(sh, from) {
+  const last = sh.getLastRow(); let start = from;
+  if (last >= GRID_FIRST) start = ymd_(addDays_(new Date(normDate_(sh.getRange(last, 1).getValue()) + 'T12:00:00+09:00'), 1));
+  const n = new Date(); const end = ymd_(new Date(n.getFullYear(), n.getMonth() + 2, 0));
+  const add = []; for (let d = start; d <= end; d = ymd_(addDays_(new Date(d + 'T12:00:00+09:00'), 1))) add.push([d]);
+  if (!add.length) return;
+  const r0 = Math.max(last + 1, GRID_FIRST); const rg = sh.getRange(r0, 1, add.length, 1);
+  rg.setNumberFormat('@').setValues(add);
+  sh.getRange(r0, 2, add.length, 9).setNumberFormat('#,##0;-#,##0;');
+  const wd = add.map(([d]) => new Date(d + 'T12:00:00+09:00').getDay());
+  add.forEach(([d], i) => { if (wd[i] === 0 || wd[i] === 6) sh.getRange(r0 + i, 1).setFontColor(wd[i] === 0 ? '#c0392b' : '#2e6fd1');
+    if (d.slice(8) === '01') sh.getRange(r0 + i, 1, 1, 11).setBorder(true, null, null, null, null, null, '#555555', SpreadsheetApp.BorderStyle.SOLID_MEDIUM); });
+}
+function readFormTab_(sh) {
+  const v = sh.getDataRange().getValues(); const h = v[0].map(x => String(x).trim()); const ix = k => h.indexOf(k);
+  const n = x => Number(String(x == null ? '' : x).replace(/[^0-9.\-]/g, '')) || 0; const agg = {};
+  if (ix('날짜') < 0) return agg;
   v.slice(1).forEach(r => { const d = normDate_(r[ix('날짜')]); const ch = MANUAL_CH[String(r[ix('채널')]).trim()]; if (!d || !ch) return;
-    const k = d + '|' + ch; const a = agg[k] || (agg[k] = { date: d, ch, pay: 0, orders: 0, qty: 0, notes: [] });
-    a.pay += n(r[ix('매출(원)')]); a.orders += n(r[ix('주문건수')]); a.qty += n(r[ix('판매개수')]); const nt = String(r[ix('비고')] || '').trim(); if (nt) a.notes.push(nt); });
-  // 예전에 수기로 들어갔는데 탭에서 지워진 날짜·채널 → 0
+    const k = d + '|' + ch; const a = agg[k] || (agg[k] = { date: d, ch, pay: 0, orders: 0, qty: 0 });
+    a.pay += n(r[ix('매출(원)')]); a.orders += n(r[ix('주문건수')]); a.qty += n(r[ix('판매개수')]); });
+  return agg;
+}
+function onManualEdit_(e) { try { if (e && e.range && e.range.getSheet().getName() === GRID_TAB && e.range.getRow() >= GRID_FIRST) syncManual_(); } catch (x) { console.log('수기 반영 오류: ' + x.message); } }
+/** 입력표 → 원장 (빈 칸으로 바뀐 날짜·채널은 0으로) */
+function syncManual_() {
+  const ss = getSS_(); const sh = ss.getSheetByName(GRID_TAB);
+  if (!sh || sh.getRange(1, 1).getValue() !== '수기 매출 입력표') return { synced: 0, note: '입력표 없음 — setupManualGrid 실행 필요' };
+  extendGrid_(sh);
+  const last = sh.getLastRow(); if (last < GRID_FIRST) return { synced: 0 };
+  const v = sh.getRange(GRID_FIRST, 1, last - GRID_FIRST + 1, 11).getValues();
+  const n = x => (x === '' || x == null) ? null : (Number(String(x).replace(/[^0-9.\-]/g, '')) || 0);
+  const agg = {};
+  v.forEach(r => { const d = normDate_(r[0]); if (!d) return;
+    GRID_CH.forEach(([, ch], k) => { const pay = n(r[1 + k * 3]), od = n(r[2 + k * 3]), q = n(r[3 + k * 3]);
+      if (pay == null && od == null && q == null) return;
+      agg[d + '|' + ch] = { date: d, ch, pay: pay || 0, orders: od || 0, qty: q || 0, note: String(r[10] || '').slice(0, 200) }; }); });
   const led = ss.getSheetByName('원장'); const lv = led.getLastRow() > 1 ? led.getRange(2, 1, led.getLastRow() - 1, LEDGER_HEAD.length).getValues() : [];
-  lv.forEach(r => { if (String(r[15]) === '수기(폼)' && Object.values(MANUAL_CH).includes(r[1])) { const k = normDate_(r[0]) + '|' + r[1]; if (!agg[k]) agg[k] = { date: normDate_(r[0]), ch: r[1], pay: 0, orders: 0, qty: 0, notes: ['수기입력에서 삭제됨'] }; } });
-  const rows = Object.values(agg).map(a => buildRow_({ date: a.date, ch: a.ch, pay: a.pay, orders: a.orders, qty: a.qty, cancel: 0, refund: 0, note: a.notes.join(' / ').slice(0, 200) }, '수기(폼)'));
+  const had = {}; lv.forEach(r => { if (/^수기/.test(String(r[15])) && Object.values(MANUAL_CH).includes(r[1])) had[normDate_(r[0]) + '|' + r[1]] = r; });
+  Object.keys(had).forEach(k => { if (!agg[k]) { const [d, ch] = k.split('|'); agg[k] = { date: d, ch, pay: 0, orders: 0, qty: 0, note: '' }; } });
+  // 바뀐 것만 기록
+  const rows = Object.entries(agg).filter(([k, a]) => { const o = had[k]; return !o || +o[2] !== a.pay || +o[3] !== a.orders || +o[4] !== a.qty || String(o[14] || '') !== a.note; })
+    .map(([, a]) => buildRow_({ date: a.date, ch: a.ch, pay: a.pay, orders: a.orders, qty: a.qty, cancel: 0, refund: 0, note: a.note }, '수기(표)'));
   if (rows.length) upsertLedger_(rows);
   return { synced: rows.length };
 }
-/** API: 수기 행 추가(초기 이관용) rows:[{date, ch, pay, orders, qty, note}] */
-function manualAdd_(rows) {
-  const sh = getSS_().getSheetByName('수기입력'); if (!sh) throw new Error('수기입력 탭 없음 — setupManualForm 먼저 실행');
-  const h = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(x => String(x).trim());
-  const now = new Date();
-  const out = rows.map(r => h.map(k => ({ '타임스탬프': now, '날짜': r.date, '채널': r.ch, '매출(원)': r.pay, '주문건수': r.orders, '판매개수': r.qty, '비고': r.note || '' }[k] ?? '')));
-  if (out.length) sh.getRange(sh.getLastRow() + 1, 1, out.length, h.length).setValues(out);
-  SpreadsheetApp.flush();
-  return Object.assign({ added: out.length }, syncManual_());
-}
-
 /* ============ 2. 폼 응답 → 원장 ============ */
 function onFormSubmit_(e) {
   const nv = e.namedValues || {};
-  if (nv['매출(원)']) { syncManual_(); return; } // 수기 매출 폼 → 「수기입력」 합산 반영
+  if (nv['매출(원)']) return; // (사용 안 함) 예전 수기 폼 — 지금은 「수기입력」 입력표 사용
   const g = k => (nv[k] && nv[k][0] != null ? String(nv[k][0]).trim() : '');
   const date = normDate_(g('날짜')); const ch = g('채널');
   if (!date || !ch) return;
@@ -219,7 +270,6 @@ function handle_(p) {
         return out(Object.assign({ ok: true }, replaceProducts_(p.ch, normDate_(p.d1), normDate_(p.d2), p.rows || [], p.method || 'API')));
       }
       case 'coupang': return out(Object.assign({ ok: true }, coupangIngest_(p.raw || {}))); // 서버가 보낸 쿠팡 원본 → 저장·집계
-      case 'manualAdd': return out(Object.assign({ ok: true }, manualAdd_(p.rows || [])));
       case 'manualSync': return out(Object.assign({ ok: true }, syncManual_()));
       case 'master': return out({ ok: true, rows: sheetObjects_(getSS_().getSheetByName('제품마스터')) }); // 제품마스터 전체
       case 'masterSet': return out(Object.assign({ ok: true }, setMaster_(p.rows || []))); // rows:[{ch, code, std}] → 표준제품명 갱신
