@@ -50,6 +50,7 @@ function collectDate(date) {
 
 /** API 값은 비어 있지 않은 칸만 덮어씀 (담당자가 폼으로 넣은 방문자 등은 유지) */
 function mergeLedger_(rows) {
+  if (typeof LEDGER_CACHE_ !== 'undefined') { LEDGER_CACHE_ = null; MONTH_MAP_ = null; }
   const sh = getSS_().getSheetByName('원장'); const last = sh.getLastRow();
   const vals = last > 1 ? sh.getRange(2, 1, last - 1, LEDGER_HEAD.length).getValues() : [];
   const keys = vals.map(r => normDate_(r[0]) + '|' + r[1]);

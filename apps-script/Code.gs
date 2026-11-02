@@ -243,6 +243,7 @@ function buildRow_(o, method) {
 
 /** 같은 날짜+채널이 있으면 덮어쓰고(정정), 없으면 추가 */
 function upsertLedger_(rows) {
+  LEDGER_CACHE_ = null; MONTH_MAP_ = null;
   const sh = getSS_().getSheetByName('원장');
   const last = sh.getLastRow();
   const keys = last > 1 ? sh.getRange(2, 1, last - 1, 2).getValues().map(r => normDate_(r[0]) + '|' + r[1]) : [];
@@ -295,6 +296,8 @@ function handle_(p) {
       case 'weekly': return out({ ok: true, sent: sendWeekly_() });
       case 'monthly': return out({ ok: true, sent: sendMonthly_() });
       case 'preview': return out({ ok: true, text: dailyText_(p.date) });
+      case 'previewWeekly': return out({ ok: true, text: weeklyText_() });
+      case 'previewMonthly': return out({ ok: true, text: monthlyText_() });
       case 'missing': return out({ ok: true, missing: missingChannels_(p.date) });
       default: return out({ ok: false, error: 'unknown action' });
     }
@@ -434,66 +437,115 @@ function tg_(text) {
 }
 function sendDaily_(date) { return tg_(dailyText_(date)); }
 
+/* ---- 모바일용 보고 (한 줄 짧게 · 숫자 앞 아이콘 · 채널은 매출 있는 곳만) ---- */
+const WD_ = ['일', '월', '화', '수', '목', '금', '토'];
+const CH_ICON_ = { '스마트스토어': '🟢', '쿠팡': '🟠', '자사몰': '🔵', '외부몰': '🟣' };
+const md_ = d => `${+d.slice(5, 7)}/${+d.slice(8)}(${WD_[new Date(d + 'T12:00:00+09:00').getDay()]})`;
+const arr_ = (a, b) => { if (!b) return ''; const p = (a - b) / Math.abs(b) * 100; return (p >= 0 ? ' ▲' : ' ▼') + Math.abs(p).toFixed(0) + '%'; };
+const S_ = (rows, k) => rows.reduce((a, r) => a + (nz_(r[k]) || 0), 0);
+/** 표준제품명 → [제품군, 구성수량] (대시보드 제품군 규칙과 동일) */
+function pFam_(name) {
+  const n = String(name || '').replace(/\s*※.*$/, '').trim(); let m;
+  if ((m = n.match(/^(.*?진\s*\+\s*원.*?세트)\s*\((\d+)\s*세트\)/))) return [m[1].replace(/\s+/g, ' '), +m[2]];
+  if ((m = n.match(/^(.+?) 50포 (\d+)박스/))) return [m[1] + ' 50포', +m[2]];
+  if ((m = n.match(/^(.+?) 50포/))) return [m[1] + ' 50포', 1];
+  if ((m = n.match(/^(.+?) 데일리팩 (\d+)박스/))) return [m[1] + ' 데일리팩', +m[2]];
+  if ((m = n.match(/^(.+?) 10포/))) return [m[1] + ' 10포', 1];
+  if ((m = n.match(/^(.+?) 1박스\(30포\)/))) return [m[1] + ' 30포', 1];
+  if ((m = n.match(/^(산삼비책.+?) (\d+)박스$/))) return [m[1] + ' 30포', +m[2]];
+  if ((m = n.match(/^(.+?) 기프트팩/))) return [m[1] + ' 기프트팩', 1];
+  if ((m = n.match(/^(김삼미 김스낵 .+?) (\d+)개$/))) return [m[1], +m[2]];
+  return [n || String(name), 1];
+}
+/** 날짜 [a, b] 제품군별 판매량·금액 */
+function famTop_(a, b) {
+  const ss = getSS_(); const std = {};
+  sheetObjects_(ss.getSheetByName('제품마스터')).forEach(m => { std[m.채널 + '|' + m.상품코드] = String(m.표준제품명 || m['상품명(채널 원본)'] || m.상품코드).trim(); });
+  const sh = ss.getSheetByName('제품원장'); if (!sh || sh.getLastRow() < 2) return [];
+  const f = {};
+  sh.getRange(2, 1, sh.getLastRow() - 1, 6).getValues().forEach(r => { const d = normDate_(r[0]); if (d < a || d > b) return;
+    const nm = std[r[1] + '|' + String(r[2])] || String(r[3]); const [fam, mult] = pFam_(nm); const x = f[fam] || (f[fam] = { fam, units: 0, amt: 0 });
+    x.units += (Number(r[4]) || 0) * mult; x.amt += Number(r[5]) || 0; });
+  return Object.values(f).filter(x => x.units > 0 || x.amt > 0).sort((x, y) => y.amt - x.amt);
+}
+function chanLines_(rows, prevRows, d) {
+  const L = []; const cpLag = (new Date() - new Date(d + 'T12:00:00+09:00')) / 864e5 < 4;
+  CH_GROUPS.forEach(g => { const rs = rows.filter(r => GROUP_OF[r.ch] === g), v = S_(rs, 'net'), pv = S_(prevRows.filter(r => GROUP_OF[r.ch] === g), 'net');
+    if (g === '외부몰') { const sub = {}; rs.forEach(r => { if (nz_(r.net)) sub[r.ch] = (sub[r.ch] || 0) + nz_(r.net); });
+      if (!v && !Object.keys(sub).length) return;
+      L.push(`${CH_ICON_[g]} 외부몰 <b>${won_(v)}</b>`); Object.entries(sub).sort((a, b) => b[1] - a[1]).forEach(([c, x]) => L.push(`   · ${c} ${won_(x)}`)); return; }
+    const od = S_(rs, 'orders');
+    L.push(`${CH_ICON_[g]} ${g} <b>${won_(v)}</b>${arr_(v, pv)}${od ? ` · ${od}건` : ''}${g === '쿠팡' && cpLag && !v ? ' <i>(출고 후 반영)</i>' : ''}`); });
+  return L;
+}
 function dailyText_(dateStr) {
   const d = dateStr ? normDate_(dateStr) : ymd_(addDays_(new Date(), -1));
-  const led = readLedger_();
-  const day = x => led.filter(r => r.date === x);
-  const sumBy = (rows, k) => rows.reduce((a, r) => a + (nz_(r[k]) || 0), 0);
-  const tot = x => sumBy(day(x), 'net');
-  const y = tot(d), pd = tot(ymd_(addDays_(new Date(d), -1)));
-  const range = (from, to) => led.filter(r => r.date >= from && r.date <= to);
-  const w = sumBy(range(ymd_(addDays_(new Date(d), -6)), d), 'net'), pw = sumBy(range(ymd_(addDays_(new Date(d), -13)), ymd_(addDays_(new Date(d), -7))), 'net');
-  const ym = d.slice(0, 7), mtdRows = led.filter(r => r.date.slice(0, 7) === ym && r.date <= d), mtd = sumBy(mtdRows, 'net');
-  const dim = new Date(+d.slice(0, 4), +d.slice(5, 7), 0).getDate(), dn = +d.slice(8), pace = mtd / dn * dim;
-  const prevYm = ymd_(new Date(+d.slice(0, 4), +d.slice(5, 7) - 2, 1)).slice(0, 7);
-  const prevM = monthTotal_(prevYm);
-  const target = targetFor_(ym);
+  const led = readLedger_(); const day = x => led.filter(r => r.date === x);
+  const pdD = ymd_(addDays_(new Date(d + 'T12:00:00+09:00'), -1)), lwD = ymd_(addDays_(new Date(d + 'T12:00:00+09:00'), -7));
+  const T = day(d), P = day(pdD), W = day(lwD);
+  const net = S_(T, 'net'), pay = S_(T, 'pay'), od = S_(T, 'orders'), qty = S_(T, 'qty'), cr = S_(T, 'cancel') + S_(T, 'refund');
+  const ym = d.slice(0, 7), dn = +d.slice(8), dim = new Date(+d.slice(0, 4), +d.slice(5, 7), 0).getDate();
+  const mtd = S_(led.filter(r => r.date.slice(0, 7) === ym && r.date <= d), 'net');
+  const pm = new Date(+d.slice(0, 4), +d.slice(5, 7) - 2, 1), pmYm = ymd_(pm).slice(0, 7), pmDim = new Date(pm.getFullYear(), pm.getMonth() + 1, 0).getDate();
+  const pmSame = S_(led.filter(r => r.date.slice(0, 7) === pmYm && +r.date.slice(8) <= Math.min(dn, pmDim)), 'net');
+  const target = targetFor_(ym), pace = mtd / dn * dim;
   const L = [];
-  L.push(`📊 <b>보고바이오 데일리 현황</b> (${d})`, '');
-  L.push(`• 순매출: <b>${won_(y)}</b> (전일 대비 ${pct_(y, pd)})`);
-  L.push(`• 최근 7일: ${won_(w)} (직전 7일 대비 ${pct_(w, pw)})`);
-  L.push(`• ${+d.slice(5, 7)}월 누적(${dn}일): ${won_(mtd)} · 월말 페이스 ${won_(pace)}${prevM ? ` (전월 대비 ${pct_(pace, prevM)})` : ''}`);
-  L.push(target ? `• 목표 달성률: ${(mtd / target * 100).toFixed(1)}% (목표 ${won_(target)})` : '• 월 목표: 미설정 (월목표 시트)');
-  L.push('', '<b>채널별</b>');
-  CH_GROUPS.forEach(g => { const rs = day(d).filter(r => GROUP_OF[r.ch] === g); const prs = day(ymd_(addDays_(new Date(d), -1))).filter(r => GROUP_OF[r.ch] === g);
-    const v = sumBy(rs, 'net'); L.push(`  ${g} ${won_(v)} (${pct_(v, sumBy(prs, 'net'))}) 주문 ${sumBy(rs, 'orders')}건`); });
-  const flags = []; const dropPct = Number(getSetting_('ALERT_DROP_PCT') || -30);
-  const miss = missingChannels_(d); if (miss.length) flags.push(`⚠️ 미입력 채널 ${miss.length}개: ${miss.join(', ')}`);
-  const unans = sumBy(day(d), 'unans'); if (unans > 0) flags.push(`⚠️ 미답변 문의 ${unans}건`);
-  const canc = sumBy(day(d), 'cancel') + sumBy(day(d), 'refund'); if (y > 0 && canc / (y + canc) > 0.15) flags.push(`⚠️ 취소·환불 비중 ${(canc / (y + canc) * 100).toFixed(0)}% (${won_(canc)})`);
-  if (pd > 0 && (y - pd) / pd * 100 <= dropPct) flags.push(`⚠️ 전일 대비 ${pct_(y, pd)} 급감`);
-  if (target && dn >= 7 && pace < target * 0.85) flags.push(`⚠️ 현재 페이스로는 목표 미달 예상 (${(pace / target * 100).toFixed(0)}%)`);
-  CH_GROUPS.forEach(g => { const last3 = [0, 1, 2].map(i => sumBy(day(ymd_(addDays_(new Date(d), -i))).filter(r => GROUP_OF[r.ch] === g), 'net')); if (day(d).length && last3.every(v => v <= 0)) flags.push(`⚠️ ${g} 3일 연속 매출 0`); });
-  L.push('', flags.length ? '<b>특이사항</b>\n' + flags.join('\n') : '특이사항 없음');
-  L.push('', `🔗 대시보드: ${getSetting_('DASHBOARD_URL')}`);
+  L.push(`📊 <b>보고바이오 데일리</b> · ${md_(d)}`, '');
+  L.push(`💰 순매출 <b>${won_(net)}</b>`);
+  L.push(`    전일${arr_(net, S_(P, 'net')) || ' –'} · 전주 같은 요일${arr_(net, S_(W, 'net')) || ' –'}`);
+  L.push(`🧾 주문 ${od}건 · 판매 ${Math.round(qty)}개`);
+  L.push(`💳 객단가 ${od ? won_(net / od) : '–'}${cr ? ` · 취소·반품 ${won_(cr)}` : ''}`);
+  L.push('', `📈 <b>${+d.slice(5, 7)}월 누적</b> (${dn}/${dim}일)`);
+  L.push(`    <b>${won_(mtd)}</b> · 전월 같은 기간${arr_(mtd, pmSame) || ' –'}`);
+  L.push(`    월말 예상 ${won_(pace)}` + (target ? ` · 목표 ${(mtd / target * 100).toFixed(0)}%` : ''));
+  L.push('', '<b>채널별</b> (순매출 · 전일비)'); chanLines_(T, P, d).forEach(x => L.push(x));
+  try { const top = famTop_(d, d).slice(0, 3); if (top.length) { L.push('', '<b>🏆 TOP 제품</b>'); top.forEach((x, i) => L.push(`${i + 1}. ${x.fam}\n    ${Math.round(x.units)}개 · ${won_(x.amt)}`)); } } catch (e) { console.log('TOP 제품 생략: ' + e.message); }
+  const flags = [];
+  if (pay > 0 && cr / pay >= 0.15) flags.push(`취소·반품이 결제의 ${(cr / pay * 100).toFixed(0)}%`);
+  const dropPct = Number(getSetting_('ALERT_DROP_PCT') || -30); const pn = S_(P, 'net'); if (pn > 0 && (net - pn) / pn * 100 <= dropPct) flags.push(`매출 전일 대비 ${Math.round((net - pn) / pn * 100)}%`);
+  ['스마트스토어', '자사몰'].forEach(g => { const last3 = [0, 1, 2].map(i => S_(day(ymd_(addDays_(new Date(d + 'T12:00:00+09:00'), -i))).filter(r => GROUP_OF[r.ch] === g), 'pay')); if (last3.every(v => v <= 0)) flags.push(`${g} 3일 연속 결제 0`); });
+  if (target && dn >= 7 && pace < target * 0.85) flags.push(`목표 대비 페이스 ${(pace / target * 100).toFixed(0)}%`);
+  const miss = ['스마트스토어', '자사몰', '쿠팡'].filter(c => !T.some(r => r.ch === c)); if (miss.length) flags.push(`자동 수집 누락: ${miss.join(', ')}`);
+  if (flags.length) { L.push('', '<b>⚠️ 체크</b>'); flags.forEach(f => L.push('· ' + f)); }
+  L.push('', `<a href="${getSetting_('DASHBOARD_URL')}">📱 대시보드 열기</a>`);
   return L.join('\n');
 }
 
-function sendWeekly_() {
-  const led = readLedger_(); const end = ymd_(addDays_(new Date(), -1)), start = ymd_(addDays_(new Date(), -7)), pStart = ymd_(addDays_(new Date(), -14)), pEnd = ymd_(addDays_(new Date(), -8));
-  const rng = (a, b) => led.filter(r => r.date >= a && r.date <= b); const S = (rows, k) => rows.reduce((x, r) => x + (nz_(r[k]) || 0), 0);
-  const cur = rng(start, end), prev = rng(pStart, pEnd);
-  const L = [`📅 <b>주간 보고</b> (${start} ~ ${end})`, '', `• 순매출 <b>${won_(S(cur, 'net'))}</b> (전주 대비 ${pct_(S(cur, 'net'), S(prev, 'net'))})`, `• 주문 ${S(cur, 'orders')}건 · 객단가 ${won_(S(cur, 'net') / Math.max(1, S(cur, 'orders')))}`,
-    `• 취소·환불 ${won_(S(cur, 'cancel') + S(cur, 'refund'))} · 신규문의 ${S(cur, 'inq')}건 · 신규리뷰 ${S(cur, 'reviews')}건`, '', '<b>채널별 (점유율 · 전주 대비)</b>'];
-  const tot = S(cur, 'net');
-  CH_GROUPS.forEach(g => { const c = S(cur.filter(r => GROUP_OF[r.ch] === g), 'net'), p = S(prev.filter(r => GROUP_OF[r.ch] === g), 'net'); L.push(`  ${g} ${won_(c)} (${tot ? (c / tot * 100).toFixed(0) : 0}% · ${pct_(c, p)})`); });
-  const best = cur.reduce((m, r) => { const k = r.date; m[k] = (m[k] || 0) + (nz_(r.net) || 0); return m; }, {}); const top = Object.entries(best).sort((a, b) => b[1] - a[1])[0];
-  if (top) L.push('', `최고 매출일: ${top[0]} ${won_(top[1])}`);
-  L.push('', `🔗 ${getSetting_('DASHBOARD_URL')}`);
-  return tg_(L.join('\n'));
+function weeklyText_() {
+  const led = readLedger_(); const now = new Date(); const end = ymd_(addDays_(now, -1)), start = ymd_(addDays_(now, -7)), pStart = ymd_(addDays_(now, -14)), pEnd = ymd_(addDays_(now, -8));
+  const rng = (a, b) => led.filter(r => r.date >= a && r.date <= b); const cur = rng(start, end), prev = rng(pStart, pEnd);
+  const net = S_(cur, 'net'), od = S_(cur, 'orders');
+  const L = [`📅 <b>주간 보고</b> · ${md_(start)}~${md_(end)}`, '', `💰 순매출 <b>${won_(net)}</b>${arr_(net, S_(prev, 'net'))} 전주`, `🧾 주문 ${od}건 · 판매 ${Math.round(S_(cur, 'qty'))}개`, `💳 객단가 ${od ? won_(net / od) : '–'} · 취소·반품 ${won_(S_(cur, 'cancel') + S_(cur, 'refund'))}`, '', '<b>채널별</b> (점유율 · 전주비)'];
+  CH_GROUPS.forEach(g => { const c = S_(cur.filter(r => GROUP_OF[r.ch] === g), 'net'), p = S_(prev.filter(r => GROUP_OF[r.ch] === g), 'net'); if (!c && !p) return; L.push(`${CH_ICON_[g]} ${g} <b>${won_(c)}</b> · ${net ? (c / net * 100).toFixed(0) : 0}%${arr_(c, p)}`); });
+  const byDay = {}; cur.forEach(r => byDay[r.date] = (byDay[r.date] || 0) + (nz_(r.net) || 0)); const top = Object.entries(byDay).sort((a, b) => b[1] - a[1])[0];
+  if (top) L.push('', `⭐ 최고 매출일 ${md_(top[0])} ${won_(top[1])}`);
+  try { const t = famTop_(start, end).slice(0, 3); if (t.length) { L.push('', '<b>🏆 주간 TOP 제품</b>'); t.forEach((x, i) => L.push(`${i + 1}. ${x.fam}\n    ${Math.round(x.units)}개 · ${won_(x.amt)}`)); } } catch (e) {}
+  L.push('', `<a href="${getSetting_('DASHBOARD_URL')}">📱 대시보드 열기</a>`);
+  return L.join('\n');
 }
-
-function sendMonthly_() {
+function sendWeekly_() { return tg_(weeklyText_()); }
+function monthlyText_() {
   const now = new Date(); const ym = ymd_(new Date(now.getFullYear(), now.getMonth() - 1, 1)).slice(0, 7), prevYm = ymd_(new Date(now.getFullYear(), now.getMonth() - 2, 1)).slice(0, 7), lyYm = (+ym.slice(0, 4) - 1) + ym.slice(4);
-  const led = readLedger_().filter(r => r.date.slice(0, 7) === ym); const S = (rows, k) => rows.reduce((x, r) => x + (nz_(r[k]) || 0), 0);
-  const tot = S(led, 'net'), prev = monthTotal_(prevYm), ly = monthTotal_(lyYm), target = targetFor_(ym);
-  const L = [`🗓 <b>월간 보고</b> (${ym})`, '', `• 순매출 <b>${won_(tot)}</b> · 전월 대비 ${pct_(tot, prev)} · 전년 동월 대비 ${pct_(tot, ly)}`, target ? `• 목표 ${won_(target)} → 달성률 ${(tot / target * 100).toFixed(1)}%` : '• 월 목표 미설정',
-    `• 주문 ${S(led, 'orders')}건 · 객단가 ${won_(tot / Math.max(1, S(led, 'orders')))} · 취소·환불 ${won_(S(led, 'cancel') + S(led, 'refund'))}`, `• 신규문의 ${S(led, 'inq')}건 · 신규리뷰 ${S(led, 'reviews')}건`, '', '<b>채널별 (점유율 · 전월 대비)</b>'];
-  CH_GROUPS.forEach(g => { const c = S(led.filter(r => GROUP_OF[r.ch] === g), 'net'), p = monthTotal_(prevYm, g); L.push(`  ${g} ${won_(c)} (${tot ? (c / tot * 100).toFixed(0) : 0}% · ${pct_(c, p)})`); });
-  const days = new Set(led.map(r => r.date)).size, dim = new Date(+ym.slice(0, 4), +ym.slice(5, 7), 0).getDate();
-  if (days < dim) L.push('', `⚠️ 입력된 날짜 ${days}/${dim}일 — 누락일 보완 필요`);
-  L.push('', `🔗 ${getSetting_('DASHBOARD_URL')}`);
-  return tg_(L.join('\n'));
+  const all = readLedger_(); const led = all.filter(r => r.date.slice(0, 7) === ym);
+  const M = monthMap_(); const g = (k, grp) => (M[k] && M[k][grp || '합계'] != null) ? M[k][grp || '합계'] : null;
+  const net = S_(led, 'net'), od = S_(led, 'orders'), prev = g(prevYm), ly = g(lyYm), target = targetFor_(ym);
+  const L = [`🗓 <b>월간 보고</b> · ${+ym.slice(5)}월`, '', `💰 순매출 <b>${won_(net)}</b>`, `    전월${arr_(net, prev) || ' –'} · 전년 동월${arr_(net, ly) || ' –'}`];
+  if (target) L.push(`🎯 목표 ${won_(target)} · 달성 ${(net / target * 100).toFixed(0)}%`);
+  L.push(`🧾 주문 ${od}건 · 판매 ${Math.round(S_(led, 'qty'))}개`, `💳 객단가 ${od ? won_(net / od) : '–'} · 취소·반품 ${won_(S_(led, 'cancel') + S_(led, 'refund'))}`, '', '<b>채널별</b> (점유율 · 전월비)');
+  CH_GROUPS.forEach(c => { const v = S_(led.filter(r => GROUP_OF[r.ch] === c), 'net'), p = g(prevYm, c); if (!v && !p) return; L.push(`${CH_ICON_[c]} ${c} <b>${won_(v)}</b> · ${net ? (v / net * 100).toFixed(0) : 0}%${arr_(v, p)}`); });
+  try { const t = famTop_(ym + '-01', ym + '-31').slice(0, 5); if (t.length) { L.push('', '<b>🏆 월간 TOP 제품</b>'); t.forEach((x, i) => L.push(`${i + 1}. ${x.fam}\n    ${Math.round(x.units)}개 · ${won_(x.amt)}`)); } } catch (e) {}
+  L.push('', `<a href="${getSetting_('DASHBOARD_URL')}">📱 대시보드 열기</a>`);
+  return L.join('\n');
+}
+function sendMonthly_() { return tg_(monthlyText_()); }
+/** 월별 합계 표(한 번만 계산): { 'YYYY-MM': { 합계, 스마트스토어, ... } } */
+let MONTH_MAP_ = null;
+function monthMap_() {
+  if (MONTH_MAP_) return MONTH_MAP_;
+  const rows = mergedMonthly_(readLedger_().map(r => ({ date: r.date, ch: r.ch, net: nz_(r.net), orders: nz_(r.orders), qty: nz_(r.qty), visitors: nz_(r.visitors) })), sheetObjects_(getSS_().getSheetByName('월별실적_과거')));
+  const m = {}; rows.forEach(r => { const k = `${r.y}-${pad_(r.m)}`; (m[k] = m[k] || {})[r.ch] = r.sales; });
+  Object.values(m).forEach(o => { if (o['합계'] == null) o['합계'] = CH_GROUPS.reduce((a, c) => a + (o[c] || 0), 0) || null; });
+  return MONTH_MAP_ = m;
 }
 
 /* ============ 5. 보조 ============ */
@@ -502,19 +554,14 @@ function missingChannels_(dateStr) {
   const have = new Set(readLedger_().filter(r => r.date === d).map(r => r.ch));
   return CHANNELS.map(c => c[1]).filter(n => !have.has(n));
 }
-function monthTotal_(ym, group) {
-  const rows = mergedMonthly_(readLedger_().map(r => ({ date: r.date, ch: r.ch, net: nz_(r.net), orders: nz_(r.orders), qty: nz_(r.qty), visitors: nz_(r.visitors) })),
-    sheetObjects_(getSS_().getSheetByName('월별실적_과거'))).filter(r => `${r.y}-${pad_(r.m)}` === ym);
-  if (!rows.length) return null;
-  if (group) { const r = rows.find(x => x.ch === group); return r ? r.sales : null; }
-  const sum = rows.find(x => x.ch === '합계'); if (sum && sum.sales != null) return sum.sales;
-  return rows.filter(x => CH_GROUPS.includes(x.ch)).reduce((a, x) => a + (x.sales || 0), 0) || null;
-}
+function monthTotal_(ym, group) { const o = monthMap_()[ym]; if (!o) return null; return o[group || '합계'] != null ? o[group || '합계'] : null; }
 function targetFor_(ym) { const t = sheetObjects_(getSS_().getSheetByName('월목표')).find(x => x.연월 === ym); return t && num_(t.합계) ? num_(t.합계) : null; }
+let LEDGER_CACHE_ = null;
 function readLedger_() {
+  if (LEDGER_CACHE_) return LEDGER_CACHE_;
   const sh = getSS_().getSheetByName('원장'); if (sh.getLastRow() < 2) return [];
   const keys = ['date', 'ch', 'pay', 'orders', 'qty', 'cancel', 'cancelCnt', 'refund', 'refundCnt', 'net', 'visitors', 'inq', 'unans', 'reviews', 'note', 'method', 'at'];
-  return sh.getRange(2, 1, sh.getLastRow() - 1, LEDGER_HEAD.length).getValues().filter(r => r[0] && r[1]).map(r => { const o = {}; keys.forEach((k, i) => o[k] = r[i]); o.date = normDate_(o.date); return o; });
+  return LEDGER_CACHE_ = sh.getRange(2, 1, sh.getLastRow() - 1, LEDGER_HEAD.length).getValues().filter(r => r[0] && r[1]).map(r => { const o = {}; keys.forEach((k, i) => o[k] = r[i]); o.date = normDate_(o.date); return o; });
 }
 function loadHistory_(ss) {
   const h = ensureSheet_(ss, '월별실적_과거', ['연', '월', '채널명', '매출', '주문건수', '판매개수', '방문자', '출처']);
