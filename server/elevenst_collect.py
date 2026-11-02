@@ -123,6 +123,12 @@ def main(argv):
     d1 = args[0] if args else (now - timedelta(days=35)).strftime("%Y-%m-%d"); d2 = args[1] if len(args) > 1 else (d1 if args else yday)
     if not args and now.day == 15:
         m = now.month - 2; y = now.year + (m - 1) // 12; m = (m - 1) % 12 + 1; d1 = f"{y}-{m:02d}-01"
+    if "--fields" in argv:
+        raw = get("/ordservices/completed/202610150000/202610222359")
+        rows = to_dicts(raw)
+        for k, v in (rows[0].items() if rows else []):
+            print(k, "=", v if re.fullmatch(r"[0-9A-Za-z:\-\. ]*", v or "") else "(text)")
+        return 0
     if "--scan" in argv:
         # 2026-01-01 ~ 어제를 7일씩 훑어 주문이 잡히는 경로·날짜를 찾는다 (영문 출력)
         cur = datetime(2026, 1, 1); end = (now - timedelta(days=1)).replace(tzinfo=None); hits = []
