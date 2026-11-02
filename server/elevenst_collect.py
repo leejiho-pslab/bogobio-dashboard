@@ -122,7 +122,7 @@ def main(argv):
         m = now.month - 2; y = now.year + (m - 1) // 12; m = (m - 1) % 12 + 1; d1 = f"{y}-{m:02d}-01"
     if "--scan" in argv:
         # 2026-01-01 ~ 어제를 7일씩 훑어 주문이 잡히는 경로·날짜를 찾는다 (영문 출력)
-        cur = datetime(2026, 1, 1); end = now - timedelta(days=1); hits = []
+        cur = datetime(2026, 1, 1); end = (now - timedelta(days=1)).replace(tzinfo=None); hits = []
         while cur <= end:
             b = min(cur + timedelta(days=6), end)
             for nm, pth in (("complete", "/ordservices/complete/{s}/{e}"), ("shipping", "/ordservices/shipping/{s}/{e}"),
