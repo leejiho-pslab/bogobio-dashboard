@@ -99,7 +99,8 @@ def aggregate(orders, d1, d2):
         d = re.sub(r"[^0-9]", "", dt)[:8]; d = f"{d[:4]}-{d[4:6]}-{d[6:8]}" if len(d) == 8 else None
         if d not in days:
             continue
-        q = N(o.get("ordQty")); amt = (N(o.get("selPrc")) + N(o.get("optAmt") or o.get("optPrc"))) * q
+        # 판매가 합계(ordAmt = 판매가×수량, 11번가 할인 전). 실결제액은 ordPayAmt
+        q = N(o.get("ordQty")) or 1; amt = N(o.get("ordAmt")) or (N(o.get("selPrc")) + N(o.get("optAmt"))) * q
         days[d]["pay"] += amt; days[d]["qty"] += q; days[d]["orders"].add(o.get("ordNo", ""))
         code = "E" + (o.get("prdNo") or ""); k = d + "|" + code
         p = prods.setdefault(k, {"date": d, "code": code, "name": o.get("prdNm") or code, "qty": 0, "amt": 0, "cancelQty": 0, "cancelAmt": 0, "retQty": 0, "retAmt": 0, "exQty": 0})
