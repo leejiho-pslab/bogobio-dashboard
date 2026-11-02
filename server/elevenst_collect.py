@@ -60,22 +60,24 @@ def to_dicts(xml_text):
     return rows
 
 
+STATUS_PATHS = ["/ordservices/complete/{s}/{e}", "/ordservices/packaging/{s}/{e}",
+                "/ordservices/shipping/{s}/{e}", "/ordservices/completed/{s}/{e}"]
+
+
 def fetch_orders(d1, d2):
-    """[d1, d2] 결제완료 주문 (하루씩 조회 — 조회 구간 제한 대비)"""
+    """[d1, d2] 주문일 주문을 모은다. 11번가 상태별 조회는 '그 상태가 된 날' 기준이라
+    (판매완료 = 구매확정일) 주문일 뒤 45일까지 7일씩 훑고 주문일로 다시 거른다."""
     out, errors = [], []
-    cur = datetime.strptime(d1, "%Y-%m-%d"); end = datetime.strptime(d2, "%Y-%m-%d")
+    today = datetime.now(KST).replace(tzinfo=None)
+    cur = datetime.strptime(d1, "%Y-%m-%d"); end = min(datetime.strptime(d2, "%Y-%m-%d") + timedelta(days=45), today)
     while cur <= end:
-        s, e = cur.strftime("%Y%m%d0000"), cur.strftime("%Y%m%d2359")
-        try:
+        b = min(cur + timedelta(days=6), end)
+        for pth in STATUS_PATHS:
             try:
-                out += to_dicts(get(ORDER_PATH.format(s=s, e=e)))
-            except RuntimeError as ex:
-                if "400" not in str(ex) and "형식" not in str(ex):
-                    raise
-                out += to_dicts(get(ORDER_PATH.format(s=s[:10], e=e[:10])))  # yyyyMMddHH 형식 재시도
-        except Exception as ex:
-            errors.append(f"{cur:%Y-%m-%d}: {ex}")
-        cur += timedelta(days=1)
+                out += to_dicts(get(pth.format(s=cur.strftime("%Y%m%d0000"), e=b.strftime("%Y%m%d2359"))))
+            except Exception as ex:
+                errors.append(f"{cur:%Y-%m-%d} {pth.split('/')[2]}: {str(ex)[:80]}")
+        cur = b + timedelta(days=1)
     return out, errors
 
 
@@ -117,7 +119,8 @@ def main(argv):
     test = "--test" in argv
     args = [a for a in argv if not a.startswith("--")]
     now = datetime.now(KST); yday = (now - timedelta(days=1)).strftime("%Y-%m-%d")
-    d1 = args[0] if args else yday; d2 = args[1] if len(args) > 1 else (d1 if args else yday)
+    # 매일: 최근 35일 다시 집계(늦게 구매확정되는 주문 반영)
+    d1 = args[0] if args else (now - timedelta(days=35)).strftime("%Y-%m-%d"); d2 = args[1] if len(args) > 1 else (d1 if args else yday)
     if not args and now.day == 15:
         m = now.month - 2; y = now.year + (m - 1) // 12; m = (m - 1) % 12 + 1; d1 = f"{y}-{m:02d}-01"
     if "--scan" in argv:
