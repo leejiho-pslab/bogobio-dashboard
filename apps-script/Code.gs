@@ -70,6 +70,22 @@ function setup() {
   try { SpreadsheetApp.getUi().alert('설정 완료.\n1) setSecrets(비밀번호, 봇토큰, 채팅ID) 실행\n2) 배포 → 웹 앱 → URL을 대시보드에 입력\n폼 주소는 "설정" 시트 FORM_URL 참조'); } catch (e) {}
 }
 
+/** 텔레그램 연결(편집기에서 1회 실행): setTelegram('봇토큰') — 봇을 넣은 방에서 아무 메시지나 보낸 뒤 실행하면 방 번호를 자동으로 찾아 저장하고 시험 메시지를 보냄 */
+function setTelegram(token, chatId) {
+  if (!token) throw new Error("봇 토큰을 넣어 주세요: setTelegram('123456:ABC...')");
+  const p = PropertiesService.getScriptProperties(); p.setProperty('TG_TOKEN', String(token).trim());
+  if (!chatId) {
+    const j = JSON.parse(UrlFetchApp.fetch(`https://api.telegram.org/bot${String(token).trim()}/getUpdates`, { muteHttpExceptions: true }).getContentText());
+    if (!j.ok) throw new Error('토큰이 틀렸습니다: ' + (j.description || ''));
+    const chats = (j.result || []).map(u => (u.message || u.my_chat_member || u.channel_post || {}).chat).filter(Boolean);
+    if (!chats.length) throw new Error('방을 못 찾았습니다. 봇을 넣은 방(또는 봇과의 1:1 대화)에서 아무 메시지나 하나 보낸 뒤 다시 실행하세요.');
+    const c = chats.reverse().find(x => x.type !== 'private') || chats[0];
+    chatId = c.id; console.log('찾은 방: ' + (c.title || c.username || c.first_name) + ' (' + c.id + ')');
+  }
+  p.setProperty('TG_CHAT', String(chatId));
+  const r = tg_('✅ <b>보고바이오 채널 현황 봇 연결 완료</b>\n매일 08:00 어제 실적, 월요일 주간, 1일 월간 보고가 이 방으로 옵니다.');
+  console.log('시험 메시지 결과: ' + r + (r === 200 ? ' (성공)' : ' (실패 — 봇이 방에 있는지 확인)'));
+}
 function setSecrets(dashboardPassword, telegramBotToken, telegramChatId) {
   if (!dashboardPassword) throw new Error('비밀번호를 넣어주세요');
   const p = PropertiesService.getScriptProperties();
