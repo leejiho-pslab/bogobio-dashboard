@@ -117,7 +117,9 @@ function installTriggers_() { restoreTriggers(); }
 function restoreTriggers() {
   const ss = getSS_(); const have = h => ScriptApp.getProjectTriggers().some(t => t.getHandlerFunction() === h);
   if (!have('onFormSubmit_')) ScriptApp.newTrigger('onFormSubmit_').forSpreadsheet(ss).onFormSubmit().create();
-  if (!have('armDailyPush_')) ScriptApp.newTrigger('armDailyPush_').timeBased().everyDays(1).atHour(6).create(); // 06~07시에 08:00 정시 트리거를 건다
+  // 08:00 보고: 예전 방식(06시에 08:00 일회용 예약을 거는 armDailyPush_)은 일회용 예약이 사라지는 일이 있어(11/3) 매일 반복 예약으로 교체
+  ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction() === 'armDailyPush_').forEach(t => ScriptApp.deleteTrigger(t));
+  if (!have('dailyPush_')) ScriptApp.newTrigger('dailyPush_').timeBased().everyDays(1).atHour(Number(getSetting_('REPORT_HOUR') || 8)).nearMinute(0).create();
   if (!have('collectYesterday')) ScriptApp.newTrigger('collectYesterday').timeBased().everyDays(1).atHour(7).nearMinute(30).create();
   if (!have('monthly15_')) ScriptApp.newTrigger('monthly15_').timeBased().onMonthDay(15).atHour(5).create();
   if (!have('onManualEdit_')) ScriptApp.newTrigger('onManualEdit_').forSpreadsheet(ss).onEdit().create();
@@ -430,7 +432,8 @@ function armDailyPush_() {
   ScriptApp.newTrigger('dailyPush_').timeBased().at(at).create();
 }
 function dailyPush_() {
-  const today = new Date();
+  const today = new Date(); const key = 'LAST_PUSH', dk = ymd_(today), pp = PropertiesService.getScriptProperties();
+  if (pp.getProperty(key) === dk) { console.log('오늘 이미 발송함'); return; } pp.setProperty(key, dk);
   sendDaily_();
   if (today.getDay() === 1) sendWeekly_();
   if (today.getDate() === 1) sendMonthly_();
