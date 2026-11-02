@@ -120,6 +120,25 @@ def main(argv):
     d1 = args[0] if args else yday; d2 = args[1] if len(args) > 1 else (d1 if args else yday)
     if not args and now.day == 15:
         m = now.month - 2; y = now.year + (m - 1) // 12; m = (m - 1) % 12 + 1; d1 = f"{y}-{m:02d}-01"
+    if "--scan" in argv:
+        # 2026-01-01 ~ 어제를 7일씩 훑어 주문이 잡히는 경로·날짜를 찾는다 (영문 출력)
+        cur = datetime(2026, 1, 1); end = now - timedelta(days=1); hits = []
+        while cur <= end:
+            b = min(cur + timedelta(days=6), end)
+            for nm, pth in (("complete", "/ordservices/complete/{s}/{e}"), ("shipping", "/ordservices/shipping/{s}/{e}"),
+                            ("completed", "/ordservices/completed/{s}/{e}"), ("settle", "/settlement/settlementList/{d1}/{d2}")):
+                try:
+                    raw = get(pth.format(s=cur.strftime("%Y%m%d0000"), e=b.strftime("%Y%m%d2359"), d1=cur.strftime("%Y%m%d"), d2=b.strftime("%Y%m%d")))
+                    n = raw.count("<ns2:order>") + raw.count("<order>") + raw.count("<settlement>") + raw.count("<ns2:settlement>")
+                    if n or ("result_code" not in raw and len(raw) > 200):
+                        hits.append(f"{cur:%m/%d} {nm} n={n} {re.sub(r'<[^>]+>', ' ', raw)[:160]!r}")
+                except Exception as ex:
+                    if nm != "settle":
+                        hits.append(f"{cur:%m/%d} {nm} ERR {str(ex)[:60]}")
+            cur = b + timedelta(days=1)
+        print("SCAN DONE weeks", (end - datetime(2026, 1, 1)).days // 7 + 1, "hits", len(hits))
+        print("\n".join(hits[:40]) or "no orders found in any path")
+        return 0
     if test:
         # 조회 경로 후보를 7일 구간 3개로 시험: 결과코드·메시지·건수·필드
         cands = {"결제완료": "/ordservices/complete/{s}/{e}", "배송중": "/ordservices/shipping/{s}/{e}",
