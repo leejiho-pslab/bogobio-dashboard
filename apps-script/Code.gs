@@ -473,7 +473,7 @@ function famTop_(a, b) {
   sh.getRange(2, 1, sh.getLastRow() - 1, 6).getValues().forEach(r => { const d = normDate_(r[0]); if (d < a || d > b) return;
     const nm = std[r[1] + '|' + String(r[2])] || String(r[3]); const [fam, mult] = pFam_(nm); const x = f[fam] || (f[fam] = { fam, units: 0, amt: 0 });
     x.units += (Number(r[4]) || 0) * mult; x.amt += Number(r[5]) || 0; });
-  return Object.values(f).filter(x => x.units > 0 || x.amt > 0).sort((x, y) => y.amt - x.amt);
+  return Object.values(f).filter(x => x.amt > 0 && !/^(부자재|개인결제)/.test(x.fam)).sort((x, y) => y.amt - x.amt); // 부자재·개인결제는 순위에서 제외
 }
 function chanLines_(rows, prevRows, d) {
   const L = []; const cpLag = (new Date() - new Date(d + 'T12:00:00+09:00')) / 864e5 < 4;
@@ -506,7 +506,7 @@ function dailyText_(dateStr) {
   L.push(`    <b>${won_(mtd)}</b> · 전월 같은 기간${arr_(mtd, pmSame) || ' –'}`);
   L.push(`    월말 예상 ${won_(pace)}` + (target ? ` · 목표 ${(mtd / target * 100).toFixed(0)}%` : ''));
   L.push('', '<b>채널별</b> (순매출 · 전일비)'); chanLines_(T, P, d).forEach(x => L.push(x));
-  try { const top = famTop_(d, d).slice(0, 3); if (top.length) { L.push('', '<b>🏆 TOP 제품</b>'); top.forEach((x, i) => L.push(`${i + 1}. ${x.fam}\n    ${Math.round(x.units)}개 · ${won_(x.amt)}`)); } } catch (e) { console.log('TOP 제품 생략: ' + e.message); }
+  try { const top = famTop_(d, d).slice(0, 3); if (top.length) { L.push('', '<b>🏆 TOP 제품</b>'); top.forEach((x, i) => L.push(`${i + 1}. ${x.fam}\n    ${Math.round(x.units)}개 · 판매 ${won_(x.amt)}`)); } } catch (e) { console.log('TOP 제품 생략: ' + e.message); }
   const flags = [];
   if (pay > 0 && cr / pay >= 0.15) flags.push(`취소·반품이 결제의 ${(cr / pay * 100).toFixed(0)}%`);
   const dropPct = Number(getSetting_('ALERT_DROP_PCT') || -30); const pn = S_(P, 'net'); if (pn > 0 && (net - pn) / pn * 100 <= dropPct) flags.push(`매출 전일 대비 ${Math.round((net - pn) / pn * 100)}%`);
@@ -526,7 +526,7 @@ function weeklyText_() {
   CH_GROUPS.forEach(g => { const c = S_(cur.filter(r => GROUP_OF[r.ch] === g), 'net'), p = S_(prev.filter(r => GROUP_OF[r.ch] === g), 'net'); if (!c && !p) return; L.push(`${CH_ICON_[g]} ${g} <b>${won_(c)}</b> · ${net ? (c / net * 100).toFixed(0) : 0}%${arr_(c, p)}`); });
   const byDay = {}; cur.forEach(r => byDay[r.date] = (byDay[r.date] || 0) + (nz_(r.net) || 0)); const top = Object.entries(byDay).sort((a, b) => b[1] - a[1])[0];
   if (top) L.push('', `⭐ 최고 매출일 ${md_(top[0])} ${won_(top[1])}`);
-  try { const t = famTop_(start, end).slice(0, 3); if (t.length) { L.push('', '<b>🏆 주간 TOP 제품</b>'); t.forEach((x, i) => L.push(`${i + 1}. ${x.fam}\n    ${Math.round(x.units)}개 · ${won_(x.amt)}`)); } } catch (e) {}
+  try { const t = famTop_(start, end).slice(0, 3); if (t.length) { L.push('', '<b>🏆 주간 TOP 제품</b>'); t.forEach((x, i) => L.push(`${i + 1}. ${x.fam}\n    ${Math.round(x.units)}개 · 판매 ${won_(x.amt)}`)); } } catch (e) {}
   L.push('', `<a href="${getSetting_('DASHBOARD_URL')}">📱 대시보드 열기</a>`);
   return L.join('\n');
 }
@@ -540,7 +540,7 @@ function monthlyText_() {
   if (target) L.push(`🎯 목표 ${won_(target)} · 달성 ${(net / target * 100).toFixed(0)}%`);
   L.push(`🧾 주문 ${od}건 · 판매 ${Math.round(S_(led, 'qty'))}개`, `💳 객단가 ${od ? won_(net / od) : '–'} · 취소·반품 ${won_(S_(led, 'cancel') + S_(led, 'refund'))}`, '', '<b>채널별</b> (점유율 · 전월비)');
   CH_GROUPS.forEach(c => { const v = S_(led.filter(r => GROUP_OF[r.ch] === c), 'net'), p = g(prevYm, c); if (!v && !p) return; L.push(`${CH_ICON_[c]} ${c} <b>${won_(v)}</b> · ${net ? (v / net * 100).toFixed(0) : 0}%${arr_(v, p)}`); });
-  try { const t = famTop_(ym + '-01', ym + '-31').slice(0, 5); if (t.length) { L.push('', '<b>🏆 월간 TOP 제품</b>'); t.forEach((x, i) => L.push(`${i + 1}. ${x.fam}\n    ${Math.round(x.units)}개 · ${won_(x.amt)}`)); } } catch (e) {}
+  try { const t = famTop_(ym + '-01', ym + '-31').slice(0, 5); if (t.length) { L.push('', '<b>🏆 월간 TOP 제품</b>'); t.forEach((x, i) => L.push(`${i + 1}. ${x.fam}\n    ${Math.round(x.units)}개 · 판매 ${won_(x.amt)}`)); } } catch (e) {}
   L.push('', `<a href="${getSetting_('DASHBOARD_URL')}">📱 대시보드 열기</a>`);
   return L.join('\n');
 }
@@ -591,7 +591,7 @@ function addDays_(d, n) { const x = new Date(d); x.setDate(x.getDate() + n); ret
 function pad_(n) { return String(n).padStart(2, '0'); }
 function nz_(v) { return (v === '' || v == null) ? null : Number(v); }
 function num_(v) { return (v === '' || v == null) ? null : Number(v); }
-function won_(n) { if (n == null || isNaN(n)) return '–'; return Math.abs(n) >= 1e8 ? (n / 1e8).toFixed(2) + '억' : Math.round(n / 1e4).toLocaleString() + '만'; }
+function won_(n) { if (n == null || isNaN(n)) return '–'; if (!n) return '0원'; return Math.abs(n) >= 1e8 ? (n / 1e8).toFixed(2) + '억' : Math.abs(n) < 1e4 ? Math.round(n).toLocaleString() + '원' : Math.round(n / 1e4).toLocaleString() + '만'; }
 function pct_(a, b) { if (!b) return '–'; const p = (a - b) / Math.abs(b) * 100; return (p > 0 ? '+' : '') + p.toFixed(1) + '%'; }
 function sha256_(s) { return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, s, Utilities.Charset.UTF_8).map(b => ('0' + (b & 255).toString(16)).slice(-2)).join(''); }
 
