@@ -13,7 +13,7 @@ description: 보고바이오 전 채널(스마트스토어·자사몰·쿠팡·G
 - 동의·약관·결제 버튼, 팝업의 '동의'는 누르지 않는다. 팝업이 작업을 막으면 사용자에게 알린다.
 - 주문자 이름·연락처·주소는 읽어 와도 저장·출력하지 않는다(상품명·수량·금액·날짜·주문번호만).
 - 숫자를 추정해 채우지 않는다. 못 가져온 채널은 비워 두고 보고한다.
-- 대시보드 비밀번호(API key)는 사용자에게 받은 값을 대화 안에서만 쓴다.
+- 대시보드 비밀번호(API key)는 시트 '설정' 탭 `DASH_KEY` 값(또는 사용자에게 받은 값)을 대화 안에서만 쓴다. 보고·로그에 적지 않는다.
 
 ## 시트 API
 `POST https://script.google.com/macros/s/AKfycbzGB6M89TvVtns8gHwIi9_tfFeANDRI2DFVAQyh9MjXvDaGTd1ujzIXlqgvY75YYuZN_w/exec` (Content-Type: text/plain)
@@ -23,13 +23,23 @@ description: 보고바이오 전 채널(스마트스토어·자사몰·쿠팡·G
 - 순매출 = pay − cancel − refund (시트가 계산)
 - 클라우드 작업공간에서 script.google.com이 막혀 있으면 브라우저 탭 안에서 fetch로 호출한다.
 
+## 0단계 — 날짜·키 준비 (11/2 실행에서 추가)
+- **어제 날짜는 KST로 계산**: 클라우드 세션의 환경 날짜는 UTC라 하루 늦을 수 있다 → `TZ=Asia/Seoul date +%F` 로 오늘을 구해 하루 뺀다.
+- **DASH_KEY**: 구글 시트 '설정' 탭(키·값·설명)에서 `DASH_KEY` 행의 '값'을 로그인된 시트 탭 안에서 읽는다(`…/gviz/tq?tqx=out:csv&sheet=설정` fetch). 값이 비어 있거나 안내 문구("대시보드 들어갈 때 치는 비밀번호…")면 **키 미설정** → 기록(submit/products)은 건너뛰고 보고에 적는다. 키 값은 탭 안 변수에만 두고 보고·로그에 절대 쓰지 않는다.
+- **시트 API 호출 위치**: 클라우드 작업공간에서는 script.google.com이 막힘 → 시트 탭(docs.google.com) 안에서 `fetch(API,{method:'POST',headers:{'Content-Type':'text/plain'},body})` 로 호출(CORS 통과).
+- **키가 없을 때의 대체 읽기**: 원장·제품원장·수기입력 탭을 같은 gviz CSV 방식으로 직접 읽어 1·4단계(확인·이상치·보고)는 수행한다. 기록만 불가.
+- 각 몰 로그인 여부는 첫 화면을 열어 `input[type=password]` 유무 또는 로그인 URL(signin.esmplus.com, login.11st.co.kr, store.lotteon.com/cm/main/login_SO.wsp, biz.eternaljourney.co.kr/login/form)로 바로 판정한다.
+
 ## 1단계 — 자동 수집 채널 확인 (API, 07:15~07:30에 이미 돌아감)
 `data`를 받아 어제 날짜에 아래 행이 있는지 본다.
 | 채널 | 자동 수집 | 없을 때 |
 |---|---|---|
 | 스마트스토어 | 서버 07:15 (네이버 API) | "서버 수집 실패" 보고 — IP·시크릿·서버 상태 확인 필요 |
 | 쿠팡 | 서버 07:20 (쿠팡 API) | 같은 방식 보고. 키 만료(6개월, 채널톡과 공용 키) 여부 함께 안내 |
-| 자사몰 | 시트 07:30 (카페24 API) | 시트 편집기에서 `collectDate('YYYY-MM-DD')` 실행 또는 보고(카페24 재연결 필요할 수 있음) |
+| 자사몰 | 시트 07:30 (카페24 API) | 시트 편집기에서 `collectDate('YYYY-MM-DD')` 실행 또는 보고(카페24 재연결 필요할 수 있음). 3일 연속 0원이면 ⚠️ |
+| 11번가 | 서버 07:25 (`elevenst_collect.py`, 11/2부터) | 0건이면 행 없음 가능. 서버 정상이면 2단계 생략 가능 |
+| 롯데ON | 서버 07:28 (`lotteon_collect.py`, 11/2부터) | 위와 같음 |
+| 수기 채널 | 「수기입력」 탭(전용 구글폼, 11/2 개편) | 어제 입력 없으면 "입력 필요" 보고. 옛 '설문지 응답 시트1'은 보지 않음 |
 제품원장에 같은 날짜 행이 있는지도 함께 확인한다.
 
 ## 2단계 — 외부몰 웹 수집 (Claude 브라우저, 로그인된 탭 사용)
