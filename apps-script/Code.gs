@@ -250,7 +250,10 @@ function buildRow_(o, method) {
 }
 
 /** 같은 날짜+채널이 있으면 덮어쓰고(정정), 없으면 추가 */
-function upsertLedger_(rows) {
+/** 원장 쓰기는 한 번에 하나씩(서버 수집 5개 + 시트 수집이 07:15~07:30에 겹쳐도 서로 덮어쓰지 않게) */
+function withLedgerLock_(fn) { const lk = LockService.getScriptLock(); lk.waitLock(180000); try { return fn(); } finally { lk.releaseLock(); } }
+function upsertLedger_(rows) { return withLedgerLock_(() => upsertLedgerBody_(rows)); }
+function upsertLedgerBody_(rows) {
   LEDGER_CACHE_ = null; MONTH_MAP_ = null;
   const sh = getSS_().getSheetByName('원장');
   const last = sh.getLastRow();
@@ -425,11 +428,10 @@ function buildProducts_(asof) {
 }
 
 /* ============ 4. 텔레그램 ============ */
+/** (폐기) 예전 08:00 일회용 예약 방식. 옛 배포본이 이 예약을 되살려도, 실행되면 자기 자신만 지우고 매일 예약을 보장한다(11/3) */
 function armDailyPush_() {
-  ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction() === 'dailyPush_').forEach(t => ScriptApp.deleteTrigger(t));
-  const h = Number(getSetting_('REPORT_HOUR') || 8);
-  const at = new Date(); at.setHours(h, 0, 0, 0); if (at < new Date()) at.setDate(at.getDate() + 1);
-  ScriptApp.newTrigger('dailyPush_').timeBased().at(at).create();
+  ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction() === 'armDailyPush_').forEach(t => ScriptApp.deleteTrigger(t));
+  restoreTriggers();
 }
 function dailyPush_() {
   const today = new Date(); const key = 'LAST_PUSH', dk = ymd_(today), pp = PropertiesService.getScriptProperties();
@@ -515,7 +517,7 @@ function dailyText_(dateStr) {
   const dropPct = Number(getSetting_('ALERT_DROP_PCT') || -30); const pn = S_(P, 'net'); if (pn > 0 && (net - pn) / pn * 100 <= dropPct) flags.push(`매출 전일 대비 ${Math.round((net - pn) / pn * 100)}%`);
   ['스마트스토어', '자사몰'].forEach(g => { const last3 = [0, 1, 2].map(i => S_(day(ymd_(addDays_(new Date(d + 'T12:00:00+09:00'), -i))).filter(r => GROUP_OF[r.ch] === g), 'pay')); if (last3.every(v => v <= 0)) flags.push(`${g} 3일 연속 결제 0`); });
   if (target && dn >= 7 && pace < target * 0.85) flags.push(`목표 대비 페이스 ${(pace / target * 100).toFixed(0)}%`);
-  const miss = ['스마트스토어', '자사몰', '쿠팡'].filter(c => !T.some(r => r.ch === c)); if (miss.length) flags.push(`자동 수집 누락: ${miss.join(', ')}`);
+  const miss = ['스마트스토어', '자사몰', '쿠팡', '11번가', '롯데온', 'SSG'].filter(c => !T.some(r => r.ch === c)); if (miss.length) flags.push(`자동 수집 누락: ${miss.join(', ')}`);
   if (flags.length) { L.push('', '<b>⚠️ 체크</b>'); flags.forEach(f => L.push('· ' + f)); }
   L.push('', `<a href="${getSetting_('DASHBOARD_URL')}">📱 대시보드 열기</a>`);
   return L.join('\n');

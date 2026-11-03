@@ -49,19 +49,22 @@ function collectDate(date) {
 }
 
 /** API 값은 비어 있지 않은 칸만 덮어씀 (담당자가 폼으로 넣은 방문자 등은 유지) */
-function mergeLedger_(rows) {
+function mergeLedger_(rows) { return withLedgerLock_(() => mergeLedgerBody_(rows)); }
+function mergeLedgerBody_(rows) {
   if (typeof LEDGER_CACHE_ !== 'undefined') { LEDGER_CACHE_ = null; MONTH_MAP_ = null; }
   const sh = getSS_().getSheetByName('원장'); const last = sh.getLastRow();
   const vals = last > 1 ? sh.getRange(2, 1, last - 1, LEDGER_HEAD.length).getValues() : [];
   const keys = vals.map(r => normDate_(r[0]) + '|' + r[1]);
-  const add = [];
+  const add = [], idx = {}; keys.forEach((k, i) => idx[k] = i); let changed = 0;
   rows.forEach(r => {
-    const i = keys.indexOf(r[0] + '|' + r[1]);
-    if (i < 0) { add.push(r); return; }
+    const i = idx[r[0] + '|' + r[1]];
+    if (i == null) { add.push(r); return; }
     const merged = vals[i].map((old, j) => (r[j] === '' || r[j] == null) ? old : r[j]);
-    merged[0] = r[0]; merged[14] = [vals[i][14], r[14]].filter(Boolean).join(' / ').slice(0, 200);
-    sh.getRange(i + 2, 1, 1, LEDGER_HEAD.length).setValues([merged]);
+    const n0 = String(vals[i][14] || ''), n1 = String(r[14] || ''); // 같은 비고가 매일 덧붙지 않게
+    merged[0] = r[0]; merged[14] = (!n1 || n0.split(' / ').includes(n1)) ? n0 : [n0, n1].filter(Boolean).join(' / ').slice(0, 200);
+    vals[i] = merged; changed++;
   });
+  if (changed) sh.getRange(2, 1, vals.length, LEDGER_HEAD.length).setValues(vals); // 한 번에 쓰기(행마다 쓰면 느려서 시간 초과 위험)
   if (add.length) sh.getRange(sh.getLastRow() + 1, 1, add.length, LEDGER_HEAD.length).setValues(add);
 }
 
