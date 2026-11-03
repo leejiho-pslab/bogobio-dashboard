@@ -518,6 +518,8 @@ function dailyText_(dateStr) {
   ['스마트스토어', '자사몰'].forEach(g => { const last3 = [0, 1, 2].map(i => S_(day(ymd_(addDays_(new Date(d + 'T12:00:00+09:00'), -i))).filter(r => GROUP_OF[r.ch] === g), 'pay')); if (last3.every(v => v <= 0)) flags.push(`${g} 3일 연속 결제 0`); });
   if (target && dn >= 7 && pace < target * 0.85) flags.push(`목표 대비 페이스 ${(pace / target * 100).toFixed(0)}%`);
   const miss = ['스마트스토어', '자사몰', '쿠팡', '11번가', '롯데온', 'SSG'].filter(c => !T.some(r => r.ch === c)); if (miss.length) flags.push(`자동 수집 누락: ${miss.join(', ')}`);
+  // API 키 만료 3주 전부터 알림 (재발급 후 날짜를 아래 KEY_EXPIRY_에서 고칠 것)
+  KEY_EXPIRY_.forEach(([nm, exp]) => { const left = Math.round((new Date(exp + 'T00:00:00+09:00') - new Date(d + 'T00:00:00+09:00')) / 864e5); if (left <= 21) flags.push(`${nm} ${left < 0 ? '만료됨' : '만료 ' + left + '일 전'} (${exp}) — 재발급 필요`); });
   if (flags.length) { L.push('', '<b>⚠️ 체크</b>'); flags.forEach(f => L.push('· ' + f)); }
   L.push('', `<a href="${getSetting_('DASHBOARD_URL')}">📱 대시보드 열기</a>`);
   return L.join('\n');
@@ -561,6 +563,7 @@ function monthMap_() {
 }
 
 /* ============ 5. 보조 ============ */
+const KEY_EXPIRY_ = [['쿠팡 API 키', '2026-12-27'], ['11번가 API 키', '2027-04-28'], ['SSG 인증키', '2027-03-31'], ['롯데ON 인증키', '2027-09-27']];
 function missingChannels_(dateStr) {
   const d = dateStr ? normDate_(dateStr) : ymd_(addDays_(new Date(), -1));
   const have = new Set(readLedger_().filter(r => r.date === d).map(r => r.ch));
