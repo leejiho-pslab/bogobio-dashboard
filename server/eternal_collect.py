@@ -225,6 +225,8 @@ def main(argv):
     if "--login" in argv:
         if not alive() and not login():
             print("login failed / no code"); return 1
+        if "--nocollect" in argv:
+            tg("sendMessage", chat_id=chat(), text="✅ 아난티 로그인 완료 (수집 확인 중)"); print("LOGIN OK"); return 0
         cnt, tot = collect(d1, d2)
         tg("sendMessage", chat_id=chat(), text=f"✅ 아난티 로그인·수집 완료 ({d1}~{d2}: {cnt}건 · {tot:,.0f}원)\n접속이 유지되는 동안은 매일 자동 수집합니다.")
         return 0

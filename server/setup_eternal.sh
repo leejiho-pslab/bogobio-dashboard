@@ -16,5 +16,4 @@ echo "0 0 * * 1 cd ~/bogobio && python3 eternal_collect.py --login >> eternal.lo
 echo "*/10 * * * * cd ~/bogobio && python3 eternal_collect.py --ping >> eternal_ping.log 2>&1" >> /tmp/ct
 crontab /tmp/ct && echo "CRON OK"
 echo "지금 첫 로그인 시작 → 휴대폰 문자 6자리를 텔레그램 단톡방 메시지에 '답장'으로 보내주세요"
-python3 eternal_collect.py --login 2025-01-01 "$(date -d yesterday +%F)"
-python3 eternal_collect.py --test | head -5
+python3 eternal_collect.py --login --nocollect && python3 eternal_collect.py --test 2026-09-01 "$(date -d yesterday +%F)"
