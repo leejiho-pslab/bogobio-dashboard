@@ -119,7 +119,11 @@ function restoreTriggers() {
   if (!have('onFormSubmit_')) ScriptApp.newTrigger('onFormSubmit_').forSpreadsheet(ss).onFormSubmit().create();
   // 08:00 보고: 예전 방식(06시에 08:00 일회용 예약을 거는 armDailyPush_)은 일회용 예약이 사라지는 일이 있어(11/3) 매일 반복 예약으로 교체
   ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction() === 'armDailyPush_').forEach(t => ScriptApp.deleteTrigger(t));
-  if (!have('dailyPush_')) ScriptApp.newTrigger('dailyPush_').timeBased().everyDays(1).atHour(Number(getSetting_('REPORT_HOUR') || 8)).nearMinute(0).create();
+  // 일회용 예약(옛 방식)이 '있음'으로 잡혀 매일 예약이 안 만들어지는 일이 있었음(11/4) → 항상 지우고 매일 예약 2개(08시 + 09시 예비)를 새로 만든다. 하루 1회 중복 방지가 있어 두 번 가지 않음
+  ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction() === 'dailyPush_').forEach(t => ScriptApp.deleteTrigger(t));
+  const H = Number(getSetting_('REPORT_HOUR') || 8);
+  ScriptApp.newTrigger('dailyPush_').timeBased().everyDays(1).atHour(H).nearMinute(0).create();
+  ScriptApp.newTrigger('dailyPush_').timeBased().everyDays(1).atHour(H + 1).nearMinute(0).create();
   if (!have('collectYesterday')) ScriptApp.newTrigger('collectYesterday').timeBased().everyDays(1).atHour(7).nearMinute(30).create();
   if (!have('monthly15_')) ScriptApp.newTrigger('monthly15_').timeBased().onMonthDay(15).atHour(5).create();
   if (!have('onManualEdit_')) ScriptApp.newTrigger('onManualEdit_').forSpreadsheet(ss).onEdit().create();
@@ -304,6 +308,7 @@ function handle_(p) {
       case 'alert': { return out({ ok: true, sent: tg_(String(p.text || '').slice(0, 3500)) });
       }
       case 'push': return out({ ok: true, sent: sendDaily_(p.date) });
+      case 'pushOnce': return out({ ok: true, sent: dailyPush_() }); // 서버 08:05 예비 발송: 오늘 아직 안 보냈을 때만 보냄
       case 'weekly': return out({ ok: true, sent: sendWeekly_() });
       case 'monthly': return out({ ok: true, sent: sendMonthly_() });
       case 'triggers': return out({ ok: true, list: restoreTriggers() });
@@ -433,12 +438,18 @@ function armDailyPush_() {
   ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction() === 'armDailyPush_').forEach(t => ScriptApp.deleteTrigger(t));
   restoreTriggers();
 }
-function dailyPush_() {
+function dailyPush_() { // 08시·09시 예약 + 서버 08:20 예비 호출이 겹쳐도 한 번만 보내도록 잠금
+  const lk = LockService.getScriptLock(); if (!lk.tryLock(240000)) return 'busy';
+  try { return dailyPushBody_(); } finally { lk.releaseLock(); }
+}
+function dailyPushBody_() {
   const today = new Date(); const key = 'LAST_PUSH', dk = ymd_(today), pp = PropertiesService.getScriptProperties();
-  if (pp.getProperty(key) === dk) { console.log('오늘 이미 발송함'); return; } pp.setProperty(key, dk);
-  sendDaily_();
+  if (pp.getProperty(key) === dk) { console.log('오늘 이미 발송함'); return 'already'; }
+  const code = sendDaily_(); if (code !== 200) { console.log('발송 실패 ' + code); return code; } // 실패하면 표시하지 않아 예비 발송이 다시 시도
+  pp.setProperty(key, dk);
   if (today.getDay() === 1) sendWeekly_();
   if (today.getDate() === 1) sendMonthly_();
+  return 200;
 }
 function tg_(text) {
   const p = PropertiesService.getScriptProperties(); const token = p.getProperty('TG_TOKEN'), chat = p.getProperty('TG_CHAT');
