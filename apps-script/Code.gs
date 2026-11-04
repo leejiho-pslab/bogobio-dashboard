@@ -329,7 +329,7 @@ function buildData_() {
   const daily = led.map(r => ({ date: r.date, ch: r.ch, pay: nz_(r.pay), orders: nz_(r.orders), qty: nz_(r.qty), cancel: nz_(r.cancel), cancelCnt: nz_(r.cancelCnt), refund: nz_(r.refund), refundCnt: nz_(r.refundCnt), net: nz_(r.net), visitors: nz_(r.visitors), inq: nz_(r.inq), unans: nz_(r.unans), reviews: nz_(r.reviews), note: r.note, method: r.method }));
   // 월별: 채널 그룹마다 원장에 그 달 데이터가 있으면 원장 집계, 없으면 과거 월별 표 (그룹 단위로 교체)
   const monthly = mergedMonthly_(daily, sheetObjects_(ss.getSheetByName('월별실적_과거')));
-  const targets = sheetObjects_(ss.getSheetByName('월목표')).filter(t => t.연월).map(t => ({ ym: t.연월, 스마트스토어: num_(t.스마트스토어), 쿠팡: num_(t.쿠팡), 자사몰: num_(t.자사몰), 외부몰: num_(t.외부몰), total: num_(t.합계) }));
+  const targets = sheetObjects_(ss.getSheetByName('월목표')).filter(t => t.연월).map(t => ({ ym: ymOf_(t.연월), 스마트스토어: num_(t.스마트스토어), 쿠팡: num_(t.쿠팡), 자사몰: num_(t.자사몰), 외부몰: num_(t.외부몰), total: num_(t.합계) }));
   const mis = ss.getSheetByName('불일치기록'); const mismatch = mis && mis.getLastRow() > 1 ? mis.getRange(2, 1, mis.getLastRow() - 1, 7).getValues() : [];
   const asof = daily.length ? daily.map(d => d.date).sort().pop() : null;
   let products = null; try { products = buildProducts_(asof); } catch (e) { products = { error: String(e) }; }
@@ -582,7 +582,8 @@ function missingChannels_(dateStr) {
   return CHANNELS.map(c => c[1]).filter(n => !have.has(n));
 }
 function monthTotal_(ym, group) { const o = monthMap_()[ym]; if (!o) return null; return o[group || '합계'] != null ? o[group || '합계'] : null; }
-function targetFor_(ym) { const t = sheetObjects_(getSS_().getSheetByName('월목표')).find(x => x.연월 === ym); return t && num_(t.합계) ? num_(t.합계) : null; }
+const ymOf_ = v => v instanceof Date ? Utilities.formatDate(v, TZ, 'yyyy-MM') : String(v || '').trim().slice(0, 7); // 시트가 '2026-11'을 날짜로 바꿔 저장하는 경우 대비
+function targetFor_(ym) { const t = sheetObjects_(getSS_().getSheetByName('월목표')).find(x => ymOf_(x.연월) === ym); return t && num_(t.합계) ? num_(t.합계) : null; }
 let LEDGER_CACHE_ = null;
 function readLedger_() {
   if (LEDGER_CACHE_) return LEDGER_CACHE_;
