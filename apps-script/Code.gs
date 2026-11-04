@@ -307,7 +307,8 @@ function handle_(p) {
       case 'masterSet': return out(Object.assign({ ok: true }, setMaster_(p.rows || []))); // rows:[{ch, code, std}] → 표준제품명 갱신
       case 'alert': { return out({ ok: true, sent: tg_(String(p.text || '').slice(0, 3500)) });
       }
-      case 'push': return out({ ok: true, sent: sendDaily_(p.date) });
+      case 'push': { const sent = sendDaily_(p.date); if (sent === 200 && !p.date) PropertiesService.getScriptProperties().setProperty('LAST_PUSH', ymd_(new Date())); return out({ ok: true, sent }); } // 수동 발송도 '오늘 보냄'으로 기록(예비 발송 중복 방지)
+      case 'markPushed': PropertiesService.getScriptProperties().setProperty('LAST_PUSH', ymd_(new Date())); return out({ ok: true });
       case 'pushOnce': return out({ ok: true, sent: dailyPush_() }); // 서버 08:05 예비 발송: 오늘 아직 안 보냈을 때만 보냄
       case 'weekly': return out({ ok: true, sent: sendWeekly_() });
       case 'monthly': return out({ ok: true, sent: sendMonthly_() });
