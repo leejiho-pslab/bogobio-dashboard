@@ -161,40 +161,45 @@ def fetch(d1, d2):
     return [], []
 
 
-def col(head, *keys):
-    for k in keys:
-        for i, h in enumerate(head):
-            if k in h:
-                return i
-    return None
+def parse_row(r):
+    """머리글이 한 칸 어긋나 있어(주문자 칸 합침) 내용 모양으로 칸을 찾는다.
+    예: ['', '2607070017874 열기', '1', '주문완료(..)', .., '상품명 600ml(20ml*30포)', .., '1901864(1901864)', 주문자, ID, 수령자,
+         '229,000'(정가), '1'(수량), '110,600'(할인), '118,400'(판매금액), '0'(배송비), 주문일시, 결제일시]"""
+    no = next((re.match(r"\d{10,}", c).group(0) for c in r if re.match(r"\d{10,}", c)), "")
+    ci = next((i for i, c in enumerate(r) if re.fullmatch(r"\d{5,}\(\d+\)", c.strip())), None)
+    dts = [m.group(0) for c in r for m in [re.search(r"\d{4}-\d{2}-\d{2}", c)] if m]
+    if not no or ci is None or not dts:
+        return None
+    nums = [N(c) for c in r[ci + 1:] if re.fullmatch(r"[\d,]+", c.strip())]
+    if len(nums) < 4:
+        return None
+    name = max((c for c in r if re.search(r"ml|포|박스|산삼", c)), key=len, default="")
+    return {"no": no, "date": dts[-1], "code": "J" + re.match(r"\d+", r[ci].strip()).group(0), "name": name,
+            "qty": nums[1] or 1, "amt": nums[3], "cancel": any("취소" in c for c in r), "ret": any("반품" in c for c in r)}
 
 
 def aggregate(head, rows, d1, d2):
-    ci = {"no": col(head, "주문번호"), "st": col(head, "주문상태", "상태"), "code": col(head, "품목코드", "상품코드"),
-          "name": col(head, "품목이름", "품목명", "상품명"), "qty": col(head, "수량"),
-          "amt": col(head, "판매금액", "결제금액", "금액"), "dt": col(head, "결제일")}
-    g = lambda r, k: (r[ci[k]] if ci[k] is not None and ci[k] < len(r) else "")
-    days, prods = {}, {}
+    days, prods, bad = {}, {}, 0
     cur = datetime.strptime(d1, "%Y-%m-%d")
     while cur <= datetime.strptime(d2, "%Y-%m-%d"):
         d = cur.strftime("%Y-%m-%d"); cur += timedelta(days=1)
         days[d] = {"date": d, "ch": CH, "pay": 0, "orders": set(), "qty": 0, "cancel": 0, "cancelCnt": 0, "refund": 0, "refundCnt": 0, "note": "이터널저니(서버)"}
     for r in rows:
-        d = (re.search(r"\d{4}-\d{2}-\d{2}", g(r, "dt")) or [None])[0]
+        o = parse_row(r)
+        if not o:
+            bad += 1; continue
+        d = o["date"]
         if d not in days:
             continue
-        no = g(r, "no").replace("열기", "").strip(); q = N(g(r, "qty")) or 1; amt = N(g(r, "amt"))
-        code = "J" + re.sub(r"\D", "", g(r, "code")); name = g(r, "name") or code
-        p = prods.setdefault(d + code, {"date": d, "code": code, "name": name, "qty": 0, "amt": 0, "cancelQty": 0, "cancelAmt": 0, "retQty": 0, "retAmt": 0, "exQty": 0})
-        st = g(r, "st")
-        if "취소" in st:
-            days[d]["cancel"] += amt; days[d]["cancelCnt"] += 1; p["cancelQty"] += q; p["cancelAmt"] += amt
-        elif "반품" in st:
-            days[d]["refund"] += amt; days[d]["refundCnt"] += 1; p["retQty"] += q; p["retAmt"] += amt
-        else:
-            days[d]["pay"] += amt; days[d]["qty"] += q; days[d]["orders"].add(no); p["qty"] += q; p["amt"] += amt
+        p = prods.setdefault(d + o["code"], {"date": d, "code": o["code"], "name": o["name"], "qty": 0, "amt": 0, "cancelQty": 0, "cancelAmt": 0, "retQty": 0, "retAmt": 0, "exQty": 0})
+        # 원장 기준(웹 수집 때와 동일): 취소·반품 주문도 결제에 포함하고 취소/반품에 따로 잡는다 → 순매출 = 결제 − 취소 − 반품
+        days[d]["pay"] += o["amt"]; days[d]["qty"] += o["qty"]; days[d]["orders"].add(o["no"]); p["qty"] += o["qty"]; p["amt"] += o["amt"]
+        if o["cancel"]:
+            days[d]["cancel"] += o["amt"]; days[d]["cancelCnt"] += 1; p["cancelQty"] += o["qty"]; p["cancelAmt"] += o["amt"]
+        elif o["ret"]:
+            days[d]["refund"] += o["amt"]; days[d]["refundCnt"] += 1; p["retQty"] += o["qty"]; p["retAmt"] += o["amt"]
     out = [dict(x, orders=len(x["orders"]), pay=round(x["pay"]), cancel=round(x["cancel"]), refund=round(x["refund"])) for x in days.values()]
-    return out, list(prods.values()), ci
+    return out, list(prods.values()), bad
 
 
 def sheet(action, **kw):
@@ -207,7 +212,9 @@ def collect(d1, d2):
     head, rows = fetch(d1, d2)
     if not head:
         raise RuntimeError("주문 표를 찾지 못함(화면 구조 변경 가능)")
-    days, prods, ci = aggregate(head, rows, d1, d2)
+    days, prods, bad = aggregate(head, rows, d1, d2)
+    if bad:
+        raise RuntimeError(f"주문 표 {bad}줄을 읽지 못함(화면 구조 변경 가능) — 시트에 쓰지 않음")
     r1 = sheet("submit", rows=days, method="이터널저니(서버)", merge=True)
     r2 = sheet("products", ch=CH, d1=d1, d2=d2, rows=prods, method="이터널저니(서버)")
     tot = sum(x["pay"] for x in days); cnt = sum(x["orders"] for x in days)
@@ -234,7 +241,13 @@ def main(argv):
         print(now.strftime("%F %T"), "session dead - skip (다음 월요일 인증 대기)"); return 0
     if "--test" in argv:
         head, rows = fetch(d1, d2)
-        print("HEAD", head); [print(r) for r in rows[:3]]; print("rows", len(rows)); return 0
+        days, prods, bad = aggregate(head, rows, d1, d2)
+        print("rows", len(rows), "unreadable", bad)
+        for x in days:
+            if x["pay"]:
+                print(x["date"], "pay", x["pay"], "orders", x["orders"], "qty", x["qty"], "cancel", x["cancel"], "refund", x["refund"])
+        print("products", sorted({(p["code"]) for p in prods}))
+        return 0
     collect(d1, d2)
     return 0
 
