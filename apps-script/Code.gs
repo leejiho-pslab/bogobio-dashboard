@@ -11,7 +11,7 @@
 const TZ = 'Asia/Seoul';
 const CH_GROUPS = ['스마트스토어', '쿠팡', '자사몰', '외부몰'];
 const CHANNELS = [
-  ['NSS', '스마트스토어', '스마트스토어'], ['CPG', '쿠팡', '쿠팡'], ['OWN', '자사몰', '자사몰'],
+  ['NSS', '스마트스토어', '스마트스토어'], ['CPG', '쿠팡', '쿠팡'], ['OWN', '자사몰', '자사몰'], ['ENG', '영문몰', '자사몰'],
   ['GMA', 'G마켓/옥션', '외부몰'], ['SSG', 'SSG', '외부몰'], ['11ST', '11번가', '외부몰'], ['LOT', '롯데온', '외부몰'],
   ['ANT', '아난티/무케렌시아', '외부몰'], ['MIL', '국군복지몰', '외부몰'], ['GRP', '공구', '외부몰'], ['OFF', '오프라인', '외부몰'],
 ];
@@ -312,6 +312,8 @@ function handle_(p) {
       case 'pushOnce': return out({ ok: true, sent: dailyPush_() }); // 서버 08:05 예비 발송: 오늘 아직 안 보냈을 때만 보냄
       case 'weekly': return out({ ok: true, sent: sendWeekly_() });
       case 'monthly': return out({ ok: true, sent: sendMonthly_() });
+      case 'cafe24Probe': return out({ ok: true, shops: cafe24Probe_(p.start, p.end) });
+      case 'cafe24Range': { const n = cafe24Month_(p.start, p.end); return out({ ok: true, days: n }); } // 기간 재수집(자사몰+영문몰), 한 달 이내
       case 'triggers': return out({ ok: true, list: restoreTriggers() });
       case 'preview': return out({ ok: true, text: dailyText_(p.date) });
       case 'previewWeekly': return out({ ok: true, text: weeklyText_() });

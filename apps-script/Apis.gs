@@ -12,7 +12,8 @@
 
 const NAVER_BASE = 'https://api.commerce.naver.com/external';
 const CAFE24_API_VERSION = ''; // 비워두면 앱 기본 버전 사용
-const CAFE24_SHOPS = [1, 2]; // 멀티쇼핑몰 원화 상점 (1: 구 상점, 2: 현 상점). 4번은 달러 상점이라 제외
+const CAFE24_SHOPS = [1, 2]; // 멀티쇼핑몰 원화 상점 (1: 기본 보고바이오, 2: 보고바이오 공식몰) → 채널 '자사몰'
+const CAFE24_FX_SHOPS = [4]; // 4: 영문몰(USD) → 채널 '영문몰'(자사몰 그룹), 원화 환산해 기록 (11/5 추가)
 const CAFE24_SCOPES = ['mall.read_order']; // 카페24 앱에 등록한 권한과 같아야 함
 
 /* ============ 키 저장 ============ */
@@ -206,6 +207,14 @@ function cafe24Amt_(o) {
     - n('points_spent_amount') - n('credits_spent_amount');
   return v > 0 ? v : Number(o.payment_amount || 0) || 0;
 }
+/** 영문몰(달러) 주문 금액 → 원화. 환율: 주문에 적힌 환율(exchange_rate, 100 이상일 때) → 없으면 시트 '설정' 탭 USD_KRW */
+function cafe24FxAmt_(o) { return cafe24Amt_(Object.assign({}, o, { currency: 'KRW' })) * cafe24Rate_(o); }
+function cafe24Rate_(o) {
+  if (!o || !o.currency || o.currency === 'KRW') return 1;
+  const r = Number(o.exchange_rate); if (r > 100) return r;
+  const s = Number(getSetting_('USD_KRW')); if (s > 100) return s;
+  throw new Error('영문몰 환율 없음: 시트 설정 탭 USD_KRW 값을 넣어 주세요');
+}
 function cafe24Orders_(date, dateType) {
   const out = [];
   CAFE24_SHOPS.forEach(shop => {
@@ -260,14 +269,20 @@ function cafe24Backfill() {
 function cafe24BackfillReset() { PropertiesService.getScriptProperties().deleteProperty('CAFE24_BF_NEXT'); PropertiesService.getScriptProperties().deleteProperty('CAFE24_BF_END'); console.log('초기화됨'); }
 
 function cafe24Month_(start, end) {
+  const n = cafe24MonthCore_(start, end, CAFE24_SHOPS, '자사몰', false);
+  try { cafe24MonthCore_(start, end, CAFE24_FX_SHOPS, '영문몰', true); } catch (e) { console.log('영문몰 수집 오류: ' + e.message); try { tg_('⚠️ <b>영문몰 수집 오류</b> (' + start + '~' + end + ')\n' + e.message); } catch (x) {} }
+  return n;
+}
+/** 카페24 상점(shops) 묶음을 채널 ch로 기록. fx=true면 달러 주문을 원화로 환산 */
+function cafe24MonthCore_(start, end, shops, ch, fx) {
   cafe24Token_();
   const num = v => Number(String(v == null ? 0 : v).replace(/[^0-9.\-]/g, '')) || 0;
   const days = {}; for (let d = start; d <= end; d = ymd_(addDays_(new Date(d + 'T12:00:00+09:00'), 1)))
-    days[d] = { date: d, ch: '자사몰', pay: 0, orders: 0, qty: 0, cancel: 0, cancelCnt: 0, refund: '', refundCnt: '', note: '카페24API' };
+    days[d] = { date: d, ch, pay: 0, orders: 0, qty: 0, cancel: 0, cancelCnt: 0, refund: '', refundCnt: '', note: fx ? '카페24API(영문몰·원화환산)' : '카페24API' };
   const day = s => s ? ymd_(new Date(String(s).replace(' ', 'T'))) : null;
-  const krw = o => !o.currency || o.currency === 'KRW';
+  const krw = fx ? (o => true) : (o => !o.currency || o.currency === 'KRW'); const AMT = fx ? cafe24FxAmt_ : cafe24Amt_;
   const list = (dateType, extra) => { const out = [];
-    CAFE24_SHOPS.forEach(shop => {
+    shops.forEach(shop => {
       for (let off = 0; off <= 15000; off += 1000) {
         const j = cafe24Get_(`/admin/orders?shop_no=${shop}&start_date=${start}&end_date=${end}&date_type=${dateType}&limit=1000&offset=${off}${extra || ''}`);
         const l = j.orders || []; out.push(...l); if (l.length < 1000) break; }
@@ -275,9 +290,9 @@ function cafe24Month_(start, end) {
     return out; };
   // 제품별: 주문 결제금액(cafe24Amt_)을 상품별 금액 비율로 나눠 담음 → 제품 합계 = 채널 합계
   const P = {};
-  const prod = (d, it) => { const code = 'C' + (it.product_no || it.product_code || it.product_name); const k = d + '|' + code;
+  const prod = (d, it) => { const code = (fx ? 'CE' : 'C') + (it.product_no || it.product_code || it.product_name); const k = d + '|' + code;
     return P[k] || (P[k] = { date: d, code, name: it.product_name_default || it.product_name || code, qty: 0, amt: 0, cancelQty: 0, cancelAmt: 0, retQty: 0, retAmt: 0, exQty: 0 }); };
-  const shares = o => { const items = o.items || []; const amt = cafe24Amt_(o);
+  const shares = o => { const items = o.items || []; const amt = AMT(o);
     const g = items.map(it => { const q = num(it.quantity); const pa = num(it.payment_amount);
       return pa > 0 ? pa : Math.max(0, (num(it.product_price) + num(it.option_price)) * q - num(it.additional_discount_price) - num(it.coupon_discount_price) - num(it.app_item_discount_amount)); });
     const tg = g.reduce((a, b) => a + b, 0), tq = items.reduce((a, it) => a + num(it.quantity), 0) || 1;
@@ -286,7 +301,7 @@ function cafe24Month_(start, end) {
   const claimQty = (it, q) => num(it.claim_quantity) || q;
 
   list('pay_date', '&embed=items').forEach(o => { const d = day(o.payment_date || o.order_date); if (!days[d] || !krw(o)) return;
-    days[d].pay += cafe24Amt_(o); days[d].orders++;
+    days[d].pay += AMT(o); days[d].orders++;
     shares(o).forEach(({ it, q, a }) => { days[d].qty += q; const p = prod(d, it); p.qty += q; p.amt += a; }); });
   // 취소·반품: 카페24는 둘 다 cancel_date 조회에 나옴 → 상품 상태로 구분 (C 취소, R 반품). 결제된 주문만
   try { const seenC = {}, seenR = {};
@@ -303,7 +318,7 @@ function cafe24Month_(start, end) {
   catch (e) { console.log('교환 조회 생략: ' + e.message); }
   const rows = Object.values(days).map(r => { r.pay = Math.round(r.pay); r.cancel = Math.round(r.cancel); if (r.refund !== '') r.refund = Math.round(r.refund); return buildRow_(r, 'API'); });
   mergeLedger_(rows);
-  replaceProducts_('자사몰', start, end, Object.values(P), '카페24API');
+  replaceProducts_(ch, start, end, Object.values(P), fx ? '카페24API(영문몰)' : '카페24API');
   return rows.length;
 }
 
@@ -518,3 +533,14 @@ c)})},calculateCodePoint:function(d){return 128>d?1:2048>d?2:65536>d?3:4},calcul
 
 
 function _check(){ ['2026-10-01','2026-10-05','2026-10-14'].forEach(d => console.log(JSON.stringify(cafe24Daily_(d)))); }
+
+/** 점검용(웹앱 action:'cafe24Probe'): 상점별 결제 주문 수·통화·금액 필드(개인정보 제외) */
+function cafe24Probe_(start, end) {
+  cafe24Token_(); const out = {};
+  [1, 2, 3, 4].forEach(shop => { try {
+    const j = cafe24Get_(`/admin/orders?shop_no=${shop}&start_date=${start}&end_date=${end}&date_type=pay_date&limit=100&embed=items`); const l = j.orders || [];
+    const o = l[0] || {}; out[shop] = { count: l.length, currencies: [...new Set(l.map(x => x.currency))], sample: o.order_id ? { currency: o.currency, exchange_rate: o.exchange_rate, payment_amount: o.payment_amount, initial_order_amount: o.initial_order_amount, payment_date: o.payment_date, items: (o.items || []).map(it => ({ product_no: it.product_no, name: it.product_name, q: it.quantity, price: it.product_price })) } : null,
+      keys: o.order_id ? Object.keys(o).filter(k => /curr|rate|amount|price/i.test(k)).join(',') : '' };
+  } catch (e) { out[shop] = { error: e.message.slice(0, 200) }; } });
+  return out;
+}

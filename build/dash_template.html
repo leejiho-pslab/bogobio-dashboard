@@ -275,7 +275,7 @@ table.defs td{white-space:normal;text-align:left;vertical-align:top;min-width:11
     <div class="small" style="line-height:1.7;color:var(--fg-2)"><b>공통</b> · 결제 기준: 결제(입금 확인)된 날짜에 매출을 잡습니다. 취소·반품은 <b>처리가 끝난 날짜</b>에 따로 빼며, <b>순매출 = 결제금액 − 취소금액 − 반품(환불)금액</b>. 매일 07:15~07:30 전날 분을 자동 수집하고, 매월 15일에 전전월 1일~어제를 다시 수집해 늦게 바뀐 취소·반품을 반영합니다. 개인정보(주문자 이름·연락처·주소)는 저장하지 않습니다.</div>
     <div class="tbl"><table class="defs"><thead><tr><th>채널</th><th>수집 방법 · 시각</th><th>결제금액 정의</th><th>취소 · 반품 · 교환</th><th>제품별</th><th>보유 기간 · 상태</th></tr></thead><tbody>
       <tr><td><i class="dot" style="background:var(--c1)"></i>스마트스토어</td><td>네이버 커머스 API · 서버(고정 IP) 매일 07:15</td><td>상품주문별 <b>총 결제금액</b>(할인·포인트 반영 후 구매자 결제액, 배송비 포함)</td><td>취소: 취소완료일 · 반품: 반품완료일 · 교환: 교환요청일(수량만)</td><td>네이버 상품번호 기준</td><td>2025-01-01~ · 정상(제품별 포함)</td></tr>
-      <tr><td><i class="dot" style="background:var(--c3)"></i>자사몰</td><td>카페24 API · 구글 시트 매일 07:30</td><td>주문 <b>최초 결제금액</b>(상품 + 배송비 − 쿠폰·회원·적립금·예치금 할인). 원화 상점(1·2번)만, 네이버페이 결제분 포함</td><td>취소(C): 취소일 · 반품(R): 반품완료일 · 교환(E): 교환완료일 / 결제된 주문의 취소만 집계</td><td>카페24 상품번호 · 주문금액을 상품 금액 비율로 배분(합계 = 채널 매출)</td><td>2025-01-01~ · 정상</td></tr>
+      <tr><td><i class="dot" style="background:var(--c3)"></i>자사몰</td><td>카페24 API · 구글 시트 매일 07:30</td><td>주문 <b>최초 결제금액</b>(상품 + 배송비 − 쿠폰·회원·적립금·예치금 할인). 국문몰(1·2번 상점, 네이버페이 포함) + <b>영문몰(4번 상점, 달러 → 주문 환율 또는 시트 설정 USD_KRW로 원화 환산, 11/5~)</b></td><td>취소(C): 취소일 · 반품(R): 반품완료일 · 교환(E): 교환완료일 / 결제된 주문의 취소만 집계</td><td>카페24 상품번호 · 주문금액을 상품 금액 비율로 배분(합계 = 채널 매출)</td><td>2025-01-01~ · 정상</td></tr>
       <tr><td><i class="dot" style="background:var(--c2)"></i>쿠팡</td><td>쿠팡 OPEN API · 서버 매일 07:20</td><td>판매가×수량 − <b>판매자 부담 할인</b>(쿠팡 부담 할인은 빼지 않음)</td><td>취소: 취소 처리일 · 반품: 반품완료일 · 교환: 요청일</td><td>쿠팡 등록상품 기준</td><td>2025-01~11 API 정상 · <b>2025-12~ API 누락(로켓그로스 여부 확인 중)</b> → 월별은 엑셀 값 유지</td></tr>
       <tr><td><i class="dot" style="background:var(--c4)"></i>G마켓/옥션</td><td>ESM+ 판매진행내역 · 웹 수집</td><td>입금확인일 기준 <b>구매자 결제금액</b>(G마켓 TradeMoney · 옥션 PayAmnt)</td><td>취소: 판매진행내역의 차감 행(같은 날)</td><td>ESM 상품번호</td><td>2025-09~ 판매 · 수동/스킬 갱신</td></tr>
       <tr><td><i class="dot" style="background:var(--c4)"></i>11번가</td><td>셀러오피스 판매/정산현황 · 웹 수집</td><td>결제일 기준 <b>판매가</b>(11번가 부담 쿠폰은 빼지 않음)</td><td>목록에 취소 건 없음(발생 시 판매취소 현황 반영 예정)</td><td>11번가 상품번호</td><td>2025-08~ · 수동/스킬 갱신</td></tr>
@@ -311,7 +311,9 @@ const cls = p => p==null?'flat':p>0.5?'up':p<-0.5?'down':'flat';
 const arrow = p => p==null?'':p>0.5?'▲':p<-0.5?'▼':'■';
 const iso = d => d.toISOString().slice(0,10);
 const addD = (s,n) => { const d=new Date(s+'T00:00:00Z'); d.setUTCDate(d.getUTCDate()+n); return iso(d); };
-const grp = n => EXT.includes(n)?'외부몰':n;
+const OWN_SUB = ['자사몰','영문몰']; // 자사몰 그룹 = 국문몰(카페24 1·2번 상점) + 영문몰(4번, 달러→원화)
+const SUBS = {'외부몰':EXT,'자사몰':OWN_SUB}; const SUBLABEL = {'자사몰':'국문몰','영문몰':'영문몰'};
+const grp = n => EXT.includes(n)?'외부몰':(OWN_SUB.includes(n)?'자사몰':n);
 
 /* ---------- gate ---------- */
 const b64=s=>Uint8Array.from(atob(s),c=>c.charCodeAt(0));
@@ -346,7 +348,7 @@ let target=null; try{target=+localStorage.getItem('bogo_target')||null}catch(e){
 function sheetTarget(ym){ const t=(DATA.targets||[]).find(x=>x.ym===ym); return t&&t.total?t.total:null; }
 
 /* ---------- state ---------- */
-const inCh = r => S.ch==='전체' ? true : S.ch==='외부몰' ? (S.sub? r.ch===S.sub : grp(r.ch)==='외부몰') : grp(r.ch)===S.ch;
+const inCh = r => S.ch==='전체' ? true : S.sub ? r.ch===S.sub : grp(r.ch)===S.ch;
 const rows = (from,to) => D.filter(r=>r.date>=from&&r.date<=to&&inCh(r));
 const sum = (rs,k) => rs.reduce((a,r)=>a+(r[k]||0),0);
 const dayList = (from,to) => { const o=[]; for(let d=from; d<=to; d=addD(d,1)) o.push(d); return o; };
@@ -366,7 +368,6 @@ function init(){
   tabs.onclick=(e=>{const b=e.target.closest('.tab'); if(!b) return; S.ch=b.dataset.ch; S.sub=null; S.rep=null; render();});
   document.getElementById('repSel').onchange=(e=>{S.rep=e.target.value; renderReport();});
   const st=document.getElementById('subtabs');
-  st.innerHTML=`<button class="chip" data-sub="">외부몰 전체</button>`+EXT.map(c=>`<button class="chip" data-sub="${c}">${c}</button>`).join('');
   st.onclick=(e=>{const b=e.target.closest('.chip'); if(!b) return; S.sub=b.dataset.sub||null; render();});
   const pr=document.getElementById('presets');
   pr.innerHTML=[['1','어제'],['7','최근 7일'],['14','최근 14일'],['30','최근 30일'],['tm','이번달'],['lm','지난달'],['custom','직접 선택']].map(([k,l])=>`<button class="preset" data-p="${k}">${l}</button>`).join('');
@@ -393,7 +394,8 @@ function render(){
   document.getElementById('reportView').hidden=!isRep; document.getElementById('mainView').style.display=(isRep||isProd)?'none':'grid'; document.getElementById('prodView').style.display=isProd?'grid':'none';
   if(isProd){ document.getElementById('subtabs').hidden=true; history.replaceState(null,'','#products'); renderProducts(); return; }
   if(isRep){ document.getElementById('subtabs').hidden=true; history.replaceState(null,'','#'+TOK[S.ch]); renderReport(); return; }
-  const st=document.getElementById('subtabs'); st.hidden=S.ch!=='외부몰';
+  const st=document.getElementById('subtabs'); st.hidden=!SUBS[S.ch];
+  if(SUBS[S.ch]&&st.dataset.g!==S.ch){ st.dataset.g=S.ch; st.innerHTML=`<button class="chip" data-sub="">${S.ch} 전체</button>`+SUBS[S.ch].map(c=>`<button class="chip" data-sub="${c}">${SUBLABEL[c]||c}</button>`).join(''); }
   st.querySelectorAll('.chip').forEach(b=>b.setAttribute('aria-selected',(b.dataset.sub||null)===S.sub));
   document.querySelectorAll('.preset').forEach(b=>b.setAttribute('aria-pressed',b.dataset.p===S.preset));
   document.getElementById('from').value=S.from; document.getElementById('to').value=S.to;
@@ -417,7 +419,7 @@ const mdLbl=d=>`${+d.slice(5,7)}/${+d.slice(8)}`;
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const daysBetween=(a,b)=>Math.round((new Date(b+'T00:00:00Z')-new Date(a+'T00:00:00Z'))/864e5)+1;
 const wkOf=d=>{const x=new Date(d+'T00:00:00Z'); x.setUTCDate(x.getUTCDate()-((x.getUTCDay()+6)%7)); return iso(x);};
-const chMatch=(sel,ch)=>sel==='전체'?true:sel==='외부몰'?grp(ch)==='외부몰':(EXT.includes(sel)?ch===sel:grp(ch)===sel);
+const chMatch=(sel,ch)=>sel==='전체'?true:([...EXT,'영문몰'].includes(sel)?ch===sel:grp(ch)===sel);
 function pvPrepare(){
   const P=DATA.products||{}; const z=r=>({k:r[0],ch:r[1],p:r[2],qty:+r[3]||0,amt:+r[4]||0,cq:+r[5]||0,ca:+r[6]||0,rq:+r[7]||0,ra:+r[8]||0,xq:+r[9]||0});
   PM=(P.m||[]).map(z); PD=(P.d||[]).map(z);
@@ -478,7 +480,7 @@ function prodRowsHtml(fams,st,sel,toYm,selP){
       +(open?f.kids.map(a=>`<tr data-p="${esc(a.p)}" class="kid ${selP===a.p?'sel':''}"><td></td><td class="name" style="text-align:left;padding-left:28px" title="${esc(a.p)}">└ ${esc(a.p)}${a.mult>1?` <span class="small muted">×${a.mult}</span>`:''}${a.tag?`<span class="tag ${a.tag[0]}">${a.tag[1]}</span>`:''}</td>${prodCells(a,sel,toYm,a.p)}</tr>`).join(''):''); }).join('');
 }
 function famClick(e,rerender){ const fr=e.target.closest('tr[data-f]'); if(fr){ const f=fr.dataset.f; FAMOPEN.has(f)?FAMOPEN.delete(f):FAMOPEN.add(f); rerender(); return true; } return false; }
-const CH_SHORT={'스마트스토어':'스마트스토어','쿠팡':'쿠팡','자사몰':'자사몰','G마켓/옥션':'G마켓·옥션','11번가':'11번가','롯데온':'롯데ON','아난티/무케렌시아':'아난티','SSG':'SSG','국군복지몰':'국군몰','공구':'공구','오프라인':'오프라인'};
+const CH_SHORT={'스마트스토어':'스마트스토어','쿠팡':'쿠팡','자사몰':'자사몰','영문몰':'영문몰','G마켓/옥션':'G마켓·옥션','11번가':'11번가','롯데온':'롯데ON','아난티/무케렌시아':'아난티','SSG':'SSG','국군복지몰':'국군몰','공구':'공구','오프라인':'오프라인'};
 const chChip=(c,amt)=>`<span class="chb" style="--cb:var(${CHV[grp(c)]||'--c5'});${grp(c)==='외부몰'?'color:#1a1200':''}" title="${esc(c)}${amt!=null?' · '+won(amt):''}">${esc(CH_SHORT[c]||c)}</span>`;
 const chChips=chs=>Object.entries(chs||{}).filter(([,v])=>v).sort((a,b)=>b[1]-a[1]).map(([c,v])=>chChip(c,v)).join('');
 const PROD_HEAD_HTML='<thead><tr><th>#</th><th style="text-align:left">제품</th><th style="text-align:left">판매채널</th><th title="구매된 상품(옵션) 수 — 3박스 묶음 1건 = 1">구매건수</th><th title="박스·세트 환산 실제 판매 개수 — 3박스 묶음 1건 = 3">판매량</th><th>판매금액</th><th>순매출</th><th>비중</th><th>직전 대비</th><th>취소</th><th>반품</th><th>교환</th><th>반품률</th><th>흐름(12개월)</th></tr></thead>';
@@ -511,7 +513,7 @@ function renderProducts(){
   let em=document.getElementById('pvEmpty'); [...box.children].forEach(c=>{ if(c.id!=='pvEmpty') c.style.display=PD.length?'':'none'; }); if(em) em.hidden=!!PD.length;
   if(!PD.length){ if(!em){ em=document.createElement('div'); em.id='pvEmpty'; box.prepend(em); } em.innerHTML=`<div class="panel"><div class="empty" style="height:180px">제품별 데이터가 아직 없습니다.<br>구글 시트 코드 적용 후 첫 수집(소급 포함)이 끝나면 이 화면에 채워집니다.${DATA.products&&DATA.products.error?'<br><span class="small">오류: '+esc(DATA.products.error)+'</span>':''}</div></div>`; em.hidden=false; return; }
   if(!PV.ready){ PV.ready=true; if(!PV.from) pvSetPreset(PV.preset);
-    const chs=['전체',...CH.filter(c=>PD.some(r=>grp(r.ch)===c)), ...EXT.filter(c=>PD.some(r=>r.ch===c))];
+    const chs=['전체',...CH.filter(c=>PD.some(r=>grp(r.ch)===c)), ...['영문몰',...EXT].filter(c=>PD.some(r=>r.ch===c))];
     document.getElementById('pvCh').innerHTML=chs.map(c=>`<button class="chip" data-c="${c}">${c}</button>`).join('');
     document.getElementById('pvCh').onclick=e=>{const b=e.target.closest('.chip'); if(!b) return; PV.ch=b.dataset.c; PV.sel=null; renderProducts();};
     document.getElementById('pvPre').innerHTML=[['1','어제'],['7','최근 7일'],['14','최근 14일'],['30','최근 30일'],['tm','이번달'],['lm','지난달'],['90','최근 90일'],['ytd','올해'],['all','전체 기간'],['custom','직접 선택']].map(([k,l])=>`<button class="preset" data-p="${k}">${l}</button>`).join('');
