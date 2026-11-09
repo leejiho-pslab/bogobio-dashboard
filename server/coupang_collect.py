@@ -156,9 +156,7 @@ def main(argv):
     # 매일 실행: 로켓그로스 주문은 '출고 후'에야 API에 나오므로 최근 7일을 매번 다시 수집한다
     d1 = args[0] if args else (now - timedelta(days=7)).strftime("%Y-%m-%d")
     d2 = args[1] if len(args) > 1 else (d1 if args else yday)
-    if not args and now.day == 15:
-        m = now.month - 2; y = now.year + (m - 1) // 12; m = (m - 1) % 12 + 1
-        d1 = f"{y}-{m:02d}-01"
+    # (매월 1일·15일 재점검은 recheck.py가 기간을 넘겨 실행)
     if test:
         raw = fetch(yday, yday)
         print(f"COUPANG TEST {yday}: sheets {len(raw['sheets'])} rg {len(raw['rg'])} revenue {len(raw['revenue'])} cancels {len(raw['cancels'])} returns {len(raw['returns'])} exchanges {len(raw['exchanges'])}")

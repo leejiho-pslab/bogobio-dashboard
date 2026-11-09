@@ -122,8 +122,7 @@ def main(argv):
     now = datetime.now(KST); yday = (now - timedelta(days=1)).strftime("%Y-%m-%d")
     # 매일: 최근 35일 다시 집계(늦게 구매확정되는 주문 반영)
     d1 = args[0] if args else (now - timedelta(days=35)).strftime("%Y-%m-%d"); d2 = args[1] if len(args) > 1 else (d1 if args else yday)
-    if not args and now.day == 15:
-        m = now.month - 2; y = now.year + (m - 1) // 12; m = (m - 1) % 12 + 1; d1 = f"{y}-{m:02d}-01"
+    # (매월 1일·15일 재점검은 recheck.py가 기간을 넘겨 실행)
     if "--fields" in argv:
         raw = get("/ordservices/completed/202610150000/202610222359")
         rows = to_dicts(raw)

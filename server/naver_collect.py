@@ -175,10 +175,7 @@ def main(argv):
     d1 = args[0] if args else yday
     d2 = args[1] if len(args) > 1 else d1
     today = datetime.now(KST)
-    if not args and today.day == 15:  # 매월 15일: 전전월 1일 ~ 어제 재수집
-        m = today.month - 2; y = today.year + (m - 1) // 12; m = (m - 1) % 12 + 1
-        d1 = f"{y}-{m:02d}-01"; d2 = yday
-        print(f"15th re-collect: {d1} ~ {d2}")
+    # (매월 1일·15일 재점검은 recheck.py가 기간을 넘겨 실행)
     days, d = [], kst_day(d1)
     while d <= kst_day(d2):
         days.append(d.strftime("%Y-%m-%d")); d += timedelta(days=1)
