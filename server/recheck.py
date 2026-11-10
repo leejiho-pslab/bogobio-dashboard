@@ -37,7 +37,7 @@ def main(argv):
     m = now.month - 2; y = now.year + (m - 1) // 12; m = (m - 1) % 12 + 1
     d1 = argv[0] if argv else f"{y}-{m:02d}-01"; d2 = argv[1] if len(argv) > 1 else yday
     print(now.strftime("%F %T"), "RECHECK", d1, "~", d2, flush=True)
-    before = snapshot(d1, d2); fails = []
+    before = snapshot(d1, d2); fails = []; status = {}
     jobs = [("스마트스토어", ["naver_collect.py", d1, d2]), ("쿠팡", ["coupang_collect.py", d1, d2]), ("11번가", ["elevenst_collect.py", d1, d2]),
             ("롯데ON", ["lotteon_collect.py", d1, d2]), ("SSG", ["ssg_collect.py", d1, d2])]
     if os.path.exists(os.path.join(HERE, "eternal_collect.py")) and CFG.get("ej_id"):
@@ -48,11 +48,13 @@ def main(argv):
             p = subprocess.run([sys.executable] + cmd, cwd=HERE, capture_output=True, text=True, timeout=3000)
             tail = (p.stdout + p.stderr).strip().splitlines()[-1:] or [""]
             print(f"[{name}] rc={p.returncode} {int(time.time()-t0)}s {tail[0][:160]}", flush=True)
+            status[name] = p.returncode == 0
             if p.returncode != 0: fails.append(f"{name}: {tail[0][:120]}")
         except Exception as e:
-            fails.append(f"{name}: {e}"); print("ERROR", name, e, flush=True)
+            status[name] = False; fails.append(f"{name}: {e}"); print("ERROR", name, e, flush=True)
     for a, b in months(d1, d2):  # 자사몰·영문몰(카페24)은 시트가 한 달씩 다시 수집
         r = sheet("cafe24Range", start=a, end=b, timeout=400); print(f"[카페24] {a}~{b} {str(r)[:120]}", flush=True)
+        status["자사몰·영문몰"] = status.get("자사몰·영문몰", True) and bool(r.get("ok"))
         if not r.get("ok"): fails.append(f"카페24 {a[:7]}: {str(r)[:120]}")
     after = snapshot(d1, d2)
     diffs = []
@@ -61,8 +63,16 @@ def main(argv):
         if round(a0[0]) != round(b0[0]) or a0[1] != b0[1]:
             diffs.append(f"· {k[0]} {int(k[1][5:])}월: {b0[0]/1e4:,.1f}만 → <b>{a0[0]/1e4:,.1f}만</b> ({(a0[0]-b0[0])/1e4:+,.1f}만, 주문 {b0[1]}→{a0[1]})")
     head = f"🔁 <b>정기 재점검</b> {d1} ~ {d2}\n"
-    body = ("바뀐 숫자 없음 — 원장이 채널 원본과 일치합니다." if not diffs else "바로잡은 항목:\n" + "\n".join(diffs[:25]) + (f"\n…외 {len(diffs)-25}건" if len(diffs) > 25 else ""))
-    if fails: body += "\n\n⚠️ 실패: " + " / ".join(fails)[:600]
+    alias = {"롯데ON": "롯데온", "아난티": "아난티/무케렌시아", "자사몰·영문몰": "자사몰"}
+    lines = []  # 채널마다 다시 수집 성공 여부 + 바뀐 월 수
+    for name, ok in status.items():
+        chs = [alias.get(name, name)] + (["영문몰"] if name == "자사몰·영문몰" else [])
+        n = sum(1 for dd in diffs if any(dd.startswith(f"· {c} ") for c in chs))
+        lines.append(f"{'✅' if ok else '❌'} {name}: " + ("다시 수집 실패" if not ok else (f"{n}개월 수정" if n else "변경 없음")))
+    body = "<b>채널별 결과</b> (전 채널 다시 수집)\n" + "\n".join(lines)
+    body += ("\n\n원장이 채널 원본과 모두 일치합니다." if not diffs else "\n\n<b>바로잡은 항목</b>\n" + "\n".join(diffs[:25]) + (f"\n…외 {len(diffs)-25}건" if len(diffs) > 25 else ""))
+    body += "\n\n※ G마켓/옥션·수기 채널(국군복지몰·공구·오프라인)은 자동 수집 대상이 아니라 제외"
+    if fails: body += "\n\n⚠️ 실패 상세: " + " / ".join(fails)[:600]
     print(head + body, flush=True); sheet("alert", text=head + body)
     return 1 if fails else 0
 

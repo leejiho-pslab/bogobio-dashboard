@@ -153,8 +153,8 @@ def main(argv):
     test = "--test" in argv
     args = [a for a in argv if not a.startswith("--")]
     now = datetime.now(KST); yday = (now - timedelta(days=1)).strftime("%Y-%m-%d")
-    # 매일 실행: 로켓그로스 주문은 '출고 후'에야 API에 나오므로 최근 7일을 매번 다시 수집한다
-    d1 = args[0] if args else (now - timedelta(days=7)).strftime("%Y-%m-%d")
+    # 매일 실행: 로켓그로스 주문은 '출고 후'에야 API에 나오므로 최근 14일을 매번 다시 수집한다(11/10 재점검에서 7일 넘어 늦게 출고된 주문 확인 → 7→14일)
+    d1 = args[0] if args else (now - timedelta(days=14)).strftime("%Y-%m-%d")
     d2 = args[1] if len(args) > 1 else (d1 if args else yday)
     # (매월 1일·15일 재점검은 recheck.py가 기간을 넘겨 실행)
     if test:
