@@ -146,7 +146,9 @@ table.defs td{white-space:normal;text-align:left;vertical-align:top;min-width:11
   .preset{font-size:13px;padding:8px 13px}.period.sm .preset{padding:7px 12px}
   .range{display:grid;grid-template-columns:1fr auto 1fr;gap:6px}
   .range .lab{display:none}.range .hint{grid-column:1/-1;font-size:11.5px}
-  .range input,.period.sm .range input{width:100%;min-width:0;font-size:16px;padding:8px}
+  .range input,.period.sm .range input{width:100%;min-width:0;max-width:100%;font-size:16px;padding:8px 6px;-webkit-appearance:none;appearance:none;min-height:42px;text-align:center}
+  .range>*{min-width:0}.range{grid-template-columns:minmax(0,1fr) auto minmax(0,1fr)}
+  input[type=date]::-webkit-date-and-time-value{text-align:center;min-width:0}
   /* 숫자 카드: 2칸, 첫 카드는 크게 한 줄 */
   .kpis{grid-template-columns:1fr 1fr;gap:8px}
   .kpi{padding:11px 12px;min-width:0}.kpi .v{font-size:20px}.kpi .d{font-size:11.5px}
@@ -389,7 +391,9 @@ function unlock(){document.getElementById('gate').hidden=true;document.getElemen
 
 /* ---------- data ---------- */
 let M, D, allDays, lastDay, firstDay, sep, oct25, S, CY, PY, CM, PRM, PMY;
-function prepare(){ M=DATA.monthly; D=DATA.daily; allDays=[...new Set(D.map(d=>d.date))].sort(); lastDay=allDays[allDays.length-1]; firstDay=allDays[0]; CY=+lastDay.slice(0,4); PY=CY-1; CM=+lastDay.slice(5,7); PRM=CM===1?12:CM-1; PMY=CM===1?PY:CY; sep=tot(PMY)[PRM-1]; oct25=tot(PY)[CM-1]; S={ ch:'전체', sub:null, preset:'7', from:addD(lastDay,-6), to:lastDay, d:{preset:'30', from:(addD(lastDay,-29)<firstDay?firstDay:addD(lastDay,-29)), to:lastDay} }; }
+function prepare(){ M=DATA.monthly; D=DATA.daily; allDays=[...new Set(D.map(d=>d.date))].sort(); lastDay=allDays[allDays.length-1];
+  { const yk=new Date(Date.now()+9*3600e3-864e5).toISOString().slice(0,10); if(lastDay>yk){ const past=allDays.filter(x=>x<=yk); if(past.length){ allDays=past; lastDay=past[past.length-1]; DATA.asof=lastDay; } } } // 기준일은 어제(한국시간)까지: 수기입력 표에 미리 넣은 오늘·미래 날짜 때문에 '어제' 버튼이 미래로 밀리지 않게
+  firstDay=allDays[0]; CY=+lastDay.slice(0,4); PY=CY-1; CM=+lastDay.slice(5,7); PRM=CM===1?12:CM-1; PMY=CM===1?PY:CY; sep=tot(PMY)[PRM-1]; oct25=tot(PY)[CM-1]; S={ ch:'전체', sub:null, preset:'7', from:addD(lastDay,-6), to:lastDay, d:{preset:'30', from:(addD(lastDay,-29)<firstDay?firstDay:addD(lastDay,-29)), to:lastDay} }; }
 const mY = (ch,y) => Array.from({length:12},(_,i)=>M.find(r=>r.y===y&&r.m===i+1&&r.ch===ch));
 const mSub = (ch,y) => Array.from({length:12},(_,i)=>{ const ym=`${y}-${String(i+1).padStart(2,'0')}`; const rs=D.filter(r=>r.ch===ch&&r.date.startsWith(ym)); if(!rs.length) return undefined; return {y,m:i+1,ch,sales:sum(rs,'net'),orders:sum(rs,'orders'),qty:sum(rs,'qty'),visitors:rs.some(r=>r.visitors!=null)?sum(rs,'visitors'):null}; }); // 하위 채널(국문몰·영문몰·외부몰 각 몰) 월별 = 원장 일별 합계
 const mSel = y => S.sub ? mSub(S.sub,y) : mY(S.ch,y); // 지금 선택(탭+하위 버튼) 기준 월별
