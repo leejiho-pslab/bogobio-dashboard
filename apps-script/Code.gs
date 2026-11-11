@@ -314,6 +314,7 @@ function handle_(p) {
       case 'monthly': return out({ ok: true, sent: sendMonthly_() });
       case 'cafe24Probe': return out({ ok: true, shops: cafe24Probe_(p.start, p.end) });
       case 'cafe24Range': { const n = cafe24Month_(p.start, p.end); return out({ ok: true, days: n }); } // 기간 재수집(자사몰+영문몰), 한 달 이내
+      case 'adjust': return out(Object.assign({ ok: true }, addAdjust_(p))); // 환불 보정 1줄 추가(같은 줄이 있으면 무시)
       case 'triggers': return out({ ok: true, list: restoreTriggers() });
       case 'preview': return out({ ok: true, text: dailyText_(p.date) });
       case 'previewWeekly': return out({ ok: true, text: weeklyText_() });
@@ -591,7 +592,31 @@ function readLedger_() {
   if (LEDGER_CACHE_) return LEDGER_CACHE_;
   const sh = getSS_().getSheetByName('원장'); if (sh.getLastRow() < 2) return [];
   const keys = ['date', 'ch', 'pay', 'orders', 'qty', 'cancel', 'cancelCnt', 'refund', 'refundCnt', 'net', 'visitors', 'inq', 'unans', 'reviews', 'note', 'method', 'at'];
-  return LEDGER_CACHE_ = sh.getRange(2, 1, sh.getLastRow() - 1, LEDGER_HEAD.length).getValues().filter(r => r[0] && r[1]).map(r => { const o = {}; keys.forEach((k, i) => o[k] = r[i]); o.date = normDate_(o.date); return o; });
+  const rows = sh.getRange(2, 1, sh.getLastRow() - 1, LEDGER_HEAD.length).getValues().filter(r => r[0] && r[1]).map(r => { const o = {}; keys.forEach((k, i) => o[k] = r[i]); o.date = normDate_(o.date); return o; });
+  applyAdjust_(rows);
+  return LEDGER_CACHE_ = rows;
+}
+/** '보정' 탭(날짜·채널·환불금액·환불건수·메모): API로 받을 수 없는 환불(쿠팡 로켓그로스 등)을 읽을 때 순매출에서 뺀다.
+ *  원장 자체는 건드리지 않아 매일 수집·재점검이 덮어써도 보정이 유지된다. 제품별 표에는 반영되지 않음(채널 합계만). */
+const ADJ_TAB = '보정', ADJ_HEAD = ['날짜', '채널', '환불금액', '환불건수', '메모'];
+function applyAdjust_(rows) {
+  const sh = getSS_().getSheetByName(ADJ_TAB); if (!sh || sh.getLastRow() < 2) return;
+  const idx = {}; rows.forEach(r => idx[r.date + '|' + r.ch] = r);
+  sh.getRange(2, 1, sh.getLastRow() - 1, 5).getValues().forEach(a => {
+    const amt = Number(a[2]) || 0; if (!a[0] || !a[1] || !amt) return;
+    const d = normDate_(a[0]), ch = String(a[1]).trim(), cnt = Number(a[3]) || 1;
+    let r = idx[d + '|' + ch];
+    if (!r) { r = idx[d + '|' + ch] = { date: d, ch, pay: 0, orders: 0, qty: 0, cancel: 0, cancelCnt: 0, refund: 0, refundCnt: 0, net: 0, note: '', method: '보정' }; rows.push(r); }
+    r.refund = (Number(r.refund) || 0) + amt; r.refundCnt = (Number(r.refundCnt) || 0) + cnt; r.net = (Number(r.net) || 0) - amt;
+    r.note = [r.note, '환불 보정' + (a[4] ? '(' + a[4] + ')' : '')].filter(Boolean).join(' / ');
+  });
+}
+function addAdjust_(p) {
+  if (!p.date || !p.ch || !Number(p.refund)) throw new Error('date, ch, refund 필요');
+  const sh = ensureSheet_(getSS_(), ADJ_TAB, ADJ_HEAD);
+  const dup = sh.getLastRow() > 1 && sh.getRange(2, 1, sh.getLastRow() - 1, 3).getValues().some(a => normDate_(a[0]) === p.date && String(a[1]).trim() === p.ch && Number(a[2]) === Number(p.refund));
+  if (!dup) sh.appendRow([p.date, p.ch, Number(p.refund), Number(p.cnt) || 1, p.memo || '']);
+  LEDGER_CACHE_ = null; return { added: !dup, rows: sh.getLastRow() - 1 };
 }
 function loadHistory_(ss) {
   const h = ensureSheet_(ss, '월별실적_과거', ['연', '월', '채널명', '매출', '주문건수', '판매개수', '방문자', '출처']);
