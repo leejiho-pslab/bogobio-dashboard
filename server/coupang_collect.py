@@ -84,7 +84,11 @@ def fetch(a, b):
     raw = {"d1": a, "d2": b, "sheets": [], "cancels": [], "returns": [], "exchanges": [], "details": [], "rg": [], "revenue": [], "errors": []}
     # 로켓그로스(쿠팡 창고 배송) 주문: 결제일 기준, 한 번에 30일 이내
     try:
-        raw["rg"] = paged(f"/v2/providers/rg_open_api/apis/api/v1/vendors/{V}/rg/orders", {"paidDateFrom": a.replace("-", ""), "paidDateTo": b.replace("-", "")})
+        # 조회 구간을 앞뒤 하루씩 넓힌다: 쿠팡의 날짜 경계와 한국시간 결제일이 어긋나, 구간 첫날·끝날 주문이 빠졌다 들어왔다 하던 문제(11/17 확인).
+        # 시트 집계(cpParse_)가 한국시간 결제일이 [a, b] 밖인 주문은 버리므로 넓게 받아도 중복되지 않는다.
+        _d = lambda s, n: (datetime.strptime(s, "%Y-%m-%d") + timedelta(days=n)).strftime("%Y%m%d")
+        _today = datetime.now(KST).strftime("%Y%m%d")
+        raw["rg"] = paged(f"/v2/providers/rg_open_api/apis/api/v1/vendors/{V}/rg/orders", {"paidDateFrom": _d(a, -1), "paidDateTo": min(_d(b, 1), _today)})
     except Exception as e:
         raw["errors"].append(f"rg orders: {e}")
     # 매출내역: 매출인식일(구매확정일) 기준, 어제까지만 조회 가능. REFUND 행으로 로켓그로스 반품을 잡는다
