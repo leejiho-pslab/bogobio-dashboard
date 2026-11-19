@@ -943,11 +943,11 @@ function dtable(){
   document.getElementById('ddetail').innerHTML=h;
 }
 function quality(){
+  const mis=(DATA.mismatch||[]).filter(r=>/확인 필요/.test(String(r[6]||'')));
   const n=[
-    ['bad','입력 공백',`10월 16일 ~ 오늘까지 일별 데이터가 없습니다. 원장 입력(2단계 이후 자동)이 시작되면 사라집니다.`],
-    ['warn','시트 간 불일치 '+DATA.mismatch.length+'건',DATA.mismatch.map(r=>`${r[1]}월 ${r[2]} ${won(r[3])} vs ${won(r[4])} (차이 ${won(r[5])})`).join(' · ')+' — 월별집계 시트를 정본으로 채택, 담당자 확인 필요'],
-    ['warn','방문자 누락','외부몰 8개 채널은 방문자 데이터가 없어 전환율을 계산할 수 없습니다.'],
-    ['good','결제/취소 분리','원장 입력이 시작되는 날부터 결제금액·취소환불·순매출이 채널별로 분리 표시됩니다.'],
+    ...(mis.length?[['warn','시트 간 불일치 '+mis.length+'건',mis.map(r=>`${r[1]}월 ${r[2]} ${won(r[3])} vs ${won(r[4])} (차이 ${won(r[5])})`).join(' · ')+' — 담당자 확인 필요']]:[['good','과거 월 합계 정리 완료','예전 자료끼리 달랐던 월 합계는 자동 수집 원장 숫자로 확정했습니다(시트 「불일치기록」 탭에 기록).']]),
+    ['warn','방문자 누락','외부몰 채널은 방문자 데이터가 없어 전환율을 계산할 수 없습니다.'],
+    ['good','결제/취소 분리','결제금액·취소환불·순매출이 채널별로 분리 표시됩니다.'],
   ];
   document.getElementById('quality').innerHTML=n.map(([k,t,d])=>`<div class="note"><span class="pill badge ${k}">${t}</span><span>${d}</span></div>`).join('');
 }
