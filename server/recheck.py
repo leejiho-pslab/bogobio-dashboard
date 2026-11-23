@@ -71,7 +71,7 @@ def main(argv):
         lines.append(f"{'✅' if ok else '❌'} {name}: " + ("다시 수집 실패" if not ok else (f"{n}개월 수정" if n else "변경 없음")))
     body = "<b>채널별 결과</b> (전 채널 다시 수집)\n" + "\n".join(lines)
     body += ("\n\n원장이 채널 원본과 모두 일치합니다." if not diffs else "\n\n<b>바로잡은 항목</b>\n" + "\n".join(diffs[:25]) + (f"\n…외 {len(diffs)-25}건" if len(diffs) > 25 else ""))
-    body += "\n\n※ G마켓/옥션·수기 채널(국군복지몰·공구·오프라인)은 자동 수집 대상이 아니라 제외"
+    body += "\n\n※ G마켓/옥션은 12:10에 인증번호 요청 후 따로 수집·보고 / 수기 채널(국군복지몰·공구·오프라인)은 제외"
     if fails: body += "\n\n⚠️ 실패 상세: " + " / ".join(fails)[:600]
     print(head + body, flush=True); sheet("alert", text=head + body)
     return 1 if fails else 0
