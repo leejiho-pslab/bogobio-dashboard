@@ -257,6 +257,8 @@ if __name__ == "__main__":
         sys.exit(main(sys.argv[1:]))
     except Exception as ex:
         print("ERROR", ex)
+        if "--ping" in sys.argv:  # 접속 유지 점검 중 일시 오류(502·시간초과 등)는 알리지 않음 — 다음 10분 점검에서 다시 시도
+            sys.exit(1)
         try:
             sheet("alert", text="⚠️ <b>아난티 수집 오류</b>\n" + str(ex)[:500])
         except Exception:
