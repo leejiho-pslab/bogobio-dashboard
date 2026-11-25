@@ -11,7 +11,7 @@
   python3 coupang_collect.py --test                # 연결 확인만 (시트에 쓰지 않음)
 설정: config.json 의 cp_vendor, cp_access, cp_secret (+ api_url, key)
 """
-import hashlib, hmac, json, os, re, sys, time, urllib.parse, urllib.request
+import gzip, hashlib, hmac, json, os, re, sys, time, urllib.parse, urllib.request
 from datetime import datetime, timedelta, timezone
 
 KST = timezone(timedelta(hours=9))
@@ -31,6 +31,11 @@ def scrub(o):
     return o
 
 
+def _body(b):
+    """쿠팡 API가 11/24부터 압축(gzip)된 응답을 보냄 → 풀어서 읽는다"""
+    return (gzip.decompress(b) if b[:2] == b"\x1f\x8b" else b).decode("utf-8", "replace")
+
+
 def cp_get(path, params, keep_empty=()):
     q = urllib.parse.urlencode({k: v for k, v in params.items() if v is not None and (v != "" or k in keep_empty)})
     for attempt in range(6):
@@ -38,13 +43,13 @@ def cp_get(path, params, keep_empty=()):
         sig = hmac.new(CFG["cp_secret"].encode(), (dt + "GET" + path + q).encode(), hashlib.sha256).hexdigest()
         req = urllib.request.Request(HOST + path + ("?" + q if q else ""), headers={
             "Authorization": f"CEA algorithm=HmacSHA256, access-key={CFG['cp_access']}, signed-date={dt}, signature={sig}",
-            "X-Requested-By": V, "Content-Type": "application/json;charset=UTF-8"})
+            "X-Requested-By": V, "Content-Type": "application/json;charset=UTF-8", "Accept-Encoding": "gzip"})
         try:
             with urllib.request.urlopen(req, timeout=60) as r:
                 time.sleep(0.25)
-                return json.loads(r.read().decode() or "{}")
+                return json.loads(_body(r.read()) or "{}")
         except urllib.error.HTTPError as e:
-            msg = e.read().decode()[:300]
+            msg = _body(e.read())[:300]
             if e.code in (429, 500, 502, 503, 504) and attempt < 5:
                 time.sleep(2 * (attempt + 1)); continue
             raise RuntimeError(f"{path.split('/')[-1]} {e.code} {msg}")
@@ -176,6 +181,9 @@ def main(argv):
         a_s, b_s = cur.strftime("%Y-%m-%d"), b.strftime("%Y-%m-%d")
         try:
             raw = fetch(a_s, b_s)
+            if any(e.startswith(("rg orders", "ordersheets")) for e in raw["errors"]):
+                # 주문 조회 자체가 실패하면 시트에 보내지 않는다(빈 자료로 기존 매출을 0원으로 덮어쓰던 문제, 11/24~25)
+                raise RuntimeError("주문 조회 실패 — 시트 기록 건너뜀: " + raw["errors"][0][:150])
             res = sheet("coupang", raw=raw)
             print(f"{a_s}~{b_s}: sheets {len(raw['sheets'])} rg {len(raw['rg'])} rev {len(raw['revenue'])} cancel {len(raw['cancels'])} return {len(raw['returns'])} err {len(raw['errors'])} -> {str(res)[:160]}", flush=True)
             if not res.get("ok"):
